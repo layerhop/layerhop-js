@@ -1,0 +1,68 @@
+{
+  "name": "@layerhop/sdk",
+  "version": "0.1.0",
+  "description": "LayerHop SDK — best-price cross-chain and same-chain swaps",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "import": {
+          "types": "./dist/index.d.ts",
+          "default": "./dist/index.js"
+        },
+        "require": {
+          "types": "./dist/index.d.cts",
+          "default": "./dist/index.cjs"
+        }
+      },
+      "./package.json": "./package.json"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "layerhop",
+    "sdk",
+    "bridge",
+    "swap",
+    "cross-chain",
+    "solana",
+    "evm"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@layerhop/shared": "workspace:*",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/layerhop/layerhop-js.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://docs.layerhop.com",
+  "bugs": {
+    "url": "https://github.com/layerhop/layerhop-js/issues"
+  }
+}

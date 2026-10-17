@@ -1,0 +1,289 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEVNET_ENV, findMonorepoRoot, parse, run, type Io } from "../src/cli.js";
+import { formatSeconds, formatUnits, parseUnits, table } from "../src/format.js";
+import { buildSwapLink } from "../src/link.js";
+import { packageNameFrom, renderTemplate, TEMPLATE_NAMES } from "../src/templates.js";
+
+const SENDER = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+const RECIPIENT = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+
+function io(handler: (url: string, init?: RequestInit) => [number, unknown] = () => [500, {}], over: Partial<Io> = {}) {
+  const out: string[] = [];
+  const err: string[] = [];
+  const urls: string[] = [];
+  const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    urls.push(String(url));
+    const [status, body] = handler(String(url), init);
+    return new Response(JSON.stringify(body), { status });
+  }) as unknown as typeof globalThis.fetch;
+  const value: Io = { out: (s) => out.push(s), err: (s) => err.push(s), env: {}, cwd: tmpdir(), fetch, sleep: async () => {}, ...over };
+  return { io: value, out, err, urls, text: () => out.join("\n") };
+}
+
+const tmp: string[] = [];
+afterEach(() => {
+  for (const d of tmp.splice(0)) rmSync(d, { recursive: true, force: true });
+});
+
+describe("format", () => {
+  it("converts base units both ways exactly", () => {
+    expect(parseUnits("100", 6)).toBe("100000000");
+    expect(parseUnits("0.5", 9)).toBe("500000000");
+    expect(parseUnits("1.", 6)).toBe("1000000");
+    expect(parseUnits(".25", 2)).toBe("25");
+    expect(parseUnits("0", 6)).toBe("0");
+    expect(() => parseUnits("1.1234567", 6)).toThrow(/decimals/);
+    expect(() => parseUnits("1e6", 6)).toThrow(/Invalid/);
+    expect(() => parseUnits("-1", 6)).toThrow(/Invalid/);
+    expect(formatUnits("949141256", 9)).toBe("0.949141256");
+    expect(formatUnits("100000000", 6)).toBe("100");
+    expect(formatUnits("1500000", 6)).toBe("1.5");
+    expect(formatUnits("123456789012345678901234567890", 18)).toBe("123456789012.34567890123456789");
+    expect(formatUnits("7", 0)).toBe("7");
+  });
+
+  it("pads table columns", () => {
+    expect(table(["A", "BB"], [["xxx", "y"]])).toBe("A    BB\n---  --\nxxx  y");
+    expect(formatSeconds(8)).toBe("8s");
+    expect(formatSeconds(125)).toBe("2m 5s");
+    expect(formatSeconds(120)).toBe("2m");
+  });
+});
+
+describe("parse", () => {
+  it("splits command, positionals and options", () => {
+    const p = parse(["quote", "100", "USDC", "base", "SOL", "solana", "--sender", "a", "--recipient=b", "--json"]);
+    expect(p.command).toBe("quote");
+    expect(p.args).toEqual(["100", "USDC", "base", "SOL", "solana"]);
+    expect(p.opts).toMatchObject({ sender: "a", recipient: "b", json: true });
+  });
+
+  it("rejects unknown options with exit code 2", async () => {
+    const t = io();
+    expect(await run(["chains", "--nope"], t.io)).toBe(2);
+    expect(t.err[0]).toMatch(/nope/);
+  });
+
+  it("prints help and version", async () => {
+    const t = io();
+    expect(await run(["--help"], t.io)).toBe(0);
+    expect(t.text()).toMatch(/Usage: layerhop/);
+    const v = io();
+    expect(await run(["-v"], v.io)).toBe(0);
+    expect(v.text()).toBe("0.1.0");
+    expect(await run([], io().io)).toBe(1);
+    expect(await run(["bogus"], io().io)).toBe(2);
+  });
+});
+
+describe("chains / tokens", () => {
+  it("lists chains from the API as a table or JSON, honoring LAYERHOP_API_URL and key", async () => {
+    const chains = [{ id: 8453, slug: "base", name: "Base", vm: "evm", nativeSymbol: "ETH", nativeDecimals: 18, explorerTx: "x" }];
+    let key: string | undefined;
+    const t = io((_u, init) => {
+      key = (init?.headers as Record<string, string>)["x-api-key"];
+      return [200, { chains }];
+    }, { env: { LAYERHOP_API_URL: "http://local:8787/", LAYERHOP_API_KEY: "k" } });
+    expect(await run(["chains"], t.io)).toBe(0);
+    expect(t.urls[0]).toBe("http://local:8787/v1/chains");
+    expect(key).toBe("k");
+    expect(t.text()).toMatch(/^ID\s+SLUG\s+NAME/);
+    expect(t.text()).toMatch(/8453\s+base\s+Base\s+evm\s+ETH/);
+    const j = io(() => [200, { chains }]);
+    await run(["chains", "--json"], j.io);
+    expect(JSON.parse(j.text())).toEqual(chains);
+  });
+
+  it("falls back to the built-in token list when the API is unreachable", async () => {
+    const t = io(undefined, { fetch: (async () => { throw new TypeError("fetch failed"); }) as typeof fetch });
+    expect(await run(["tokens", "base"], t.io)).toBe(0);
+    expect(t.err[0]).toMatch(/built-in/);
+    expect(t.text()).toMatch(/USDC\s+6\s+0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913/);
+  });
+
+  it("reports API errors with code and docs link", async () => {
+    const t = io(() => [400, { error: { code: "UNSUPPORTED_CHAIN", message: "Unsupported chain: foo", requestId: "r1" } }]);
+    expect(await run(["tokens", "foo"], t.io)).toBe(1);
+    expect(t.err.join("\n")).toMatch(/UNSUPPORTED_CHAIN.*r1[\s\S]*errors\/UNSUPPORTED_CHAIN/);
+  });
+});
+
+describe("quote", () => {
+  const resp = {
+    best: { quoteId: "q_a", provider: "lifi", dstAmount: "949141256", dstAmountMin: "944395549", estimatedSeconds: 3, fees: { ourFeeBps: 20, gasUsd: 0.031 }, expiresAt: Math.floor(Date.now() / 1000) + 30 },
+    quotes: [] as unknown[],
+    errors: [{ provider: "relay", code: "PROVIDER_TIMEOUT", message: "Timed out" }],
+  };
+  resp.quotes = [resp.best, { ...resp.best, quoteId: "q_b", provider: "relay", dstAmount: "900000000", estimatedSeconds: 90, fees: { ourFeeBps: 20 } }];
+
+  it("converts human amounts to base units and prints a ranked table", async () => {
+    const t = io(() => [200, resp]);
+    const code = await run(["quote", "100", "USDC", "base", "SOL", "solana", "--sender", SENDER, "--recipient", RECIPIENT], t.io);
+    expect(code).toBe(0);
+    const u = new URL(t.urls[0]!);
+    expect(u.origin + u.pathname).toBe("https://api.layerhop.com/v1/quote");
+    expect(u.searchParams.get("amount")).toBe("100000000");
+    expect(u.searchParams.get("srcChain")).toBe("base");
+    expect(u.searchParams.get("dstChain")).toBe("solana");
+    expect(u.searchParams.get("channel")).toBe("api");
+    expect(t.text()).toMatch(/\*\s+lifi\s+0\.949141256 SOL\s+0\.944395549 SOL\s+3s\s+20 bps\s+\$0\.03\s+q_a/);
+    expect(t.text()).toMatch(/relay\s+0\.9 SOL.*1m 30s/);
+    expect(t.err.join()).toMatch(/relay: PROVIDER_TIMEOUT/);
+  });
+
+  it("supports --base-units, --slippage-bps, --integrator and --json", async () => {
+    const t = io(() => [200, resp]);
+    await run(["quote", "5", "0xdeadbeef", "base", "SOL", "solana", "--sender", "a", "--recipient", "b", "--base-units", "--slippage-bps", "75", "--integrator", "myapp", "--json"], t.io);
+    const u = new URL(t.urls[0]!);
+    expect(u.searchParams.get("amount")).toBe("5");
+    expect(u.searchParams.get("slippageBps")).toBe("75");
+    expect(u.searchParams.get("integrator")).toBe("myapp");
+    expect(JSON.parse(t.text()).best.quoteId).toBe("q_a");
+  });
+
+  it("validates input before calling the API", async () => {
+    const cases = [
+      ["quote", "100", "USDC", "base", "SOL", "solana", "--sender", "a"],
+      ["quote", "100", "USDC", "base", "SOL"],
+      ["quote", "100", "USDC", "atlantis", "SOL", "solana", "--sender", "a", "--recipient", "b"],
+      ["quote", "1", "0xunknown", "base", "SOL", "solana", "--sender", "a", "--recipient", "b"],
+      ["quote", "0", "USDC", "base", "SOL", "solana", "--sender", "a", "--recipient", "b"],
+      ["quote", "1.0000001", "USDC", "base", "SOL", "solana", "--sender", "a", "--recipient", "b"],
+    ];
+    for (const argv of cases) {
+      const t = io(() => [200, resp]);
+      expect(await run(argv, t.io), argv.join(" ")).toBe(2);
+      expect(t.urls).toHaveLength(0);
+    }
+  });
+});
+
+describe("status", () => {
+  it("prints one status", async () => {
+    const t = io(() => [200, { provider: "relay", id: "0xh", state: "pending", srcTxHash: "0xh" }]);
+    expect(await run(["status", "relay", "0xh"], t.io)).toBe(0);
+    expect(t.urls[0]).toBe("https://api.layerhop.com/v1/orders/relay/0xh");
+    expect(t.text()).toBe("PENDING  src 0xh");
+  });
+
+  it("--watch polls until final and prints each change", async () => {
+    const states = ["pending", "pending", "filled"];
+    const t = io((u) => [200, { provider: "relay", id: "0xh", state: states.shift(), dstTxHash: states.length ? undefined : "sig" }]);
+    expect(await run(["status", "relay", "0xh", "--watch", "--interval", "1"], t.io)).toBe(0);
+    expect(t.urls).toHaveLength(3);
+    expect(t.out).toHaveLength(2);
+    expect(t.out[1]).toMatch(/FILLED\s+dst sig/);
+  });
+
+  it("exits 1 when the order was refunded", async () => {
+    const t = io(() => [200, { provider: "debridge", id: "x", state: "refunded" }]);
+    expect(await run(["status", "debridge", "x", "-w", "--json"], t.io)).toBe(1);
+    expect(JSON.parse(t.out[0]!).state).toBe("refunded");
+  });
+});
+
+describe("link", () => {
+  it("builds swap deep links per URL_CONTRACT", () => {
+    expect(buildSwapLink({ srcChain: "base", srcToken: "USDC", dstChain: "solana", dstToken: "SOL", amount: "100" })).toBe(
+      "https://layerhop.com/swap?srcChain=base&srcToken=USDC&dstChain=solana&dstToken=SOL&amount=100",
+    );
+    expect(
+      buildSwapLink({ srcChain: "base", srcToken: "USDC", dstChain: "solana", dstToken: "SOL", amount: "0.5", recipient: RECIPIENT, slippageBps: 50, ref: "x", integrator: "myapp" }),
+    ).toBe(`https://layerhop.com/swap?srcChain=base&srcToken=USDC&dstChain=solana&dstToken=SOL&amount=0.5&recipient=${RECIPIENT}&slippageBps=50&ref=x&integrator=myapp`);
+    expect(() => buildSwapLink({ srcChain: "a", srcToken: "b", dstChain: "c", dstToken: "d", amount: "1,5" })).toThrow(/human units/);
+    expect(() => buildSwapLink({ srcChain: "a", srcToken: "b", dstChain: "c", dstToken: "d", integrator: "My App" })).toThrow(/integrator/);
+  });
+
+  it("builds embed links with theme options", () => {
+    expect(
+      buildSwapLink({ srcChain: "base", srcToken: "USDC", dstChain: "solana", dstToken: "SOL" }, { embed: { theme: "light", accent: "#22d3ee", radius: 16, lockSrc: true, hideHistory: true } }),
+    ).toBe("https://layerhop.com/embed?srcChain=base&srcToken=USDC&dstChain=solana&dstToken=SOL&theme=light&accent=22d3ee&radius=16&lockSrc=1&hideHistory=1");
+  });
+
+  it("prints the link from the command line without calling the API", async () => {
+    const t = io();
+    expect(await run(["link", "100", "USDC", "base", "SOL", "solana", "--ref", "x"], t.io)).toBe(0);
+    expect(t.text()).toBe("https://layerhop.com/swap?srcChain=base&srcToken=USDC&dstChain=solana&dstToken=SOL&amount=100&ref=x");
+    expect(t.urls).toHaveLength(0);
+    const e = io();
+    await run(["link", "1", "USDC", "base", "SOL", "solana", "--embed", "--theme", "dark", "--lock-dst", "--json"], e.io);
+    expect(JSON.parse(e.text()).url).toBe("https://layerhop.com/embed?srcChain=base&srcToken=USDC&dstChain=solana&dstToken=SOL&amount=1&theme=dark&lockDst=1");
+    expect(await run(["link", "1", "USDC", "base", "SOL", "solana", "--theme", "pink"], io().io)).toBe(2);
+  });
+});
+
+describe("init", () => {
+  const mk = () => {
+    const d = mkdtempSync(join(tmpdir(), "layerhop-init-"));
+    tmp.push(d);
+    return d;
+  };
+
+  it("renders every template with the project name and valid JSON", () => {
+    for (const name of TEMPLATE_NAMES) {
+      const files = renderTemplate(name, "my-app");
+      expect(JSON.parse(files["package.json"]!).name).toBe("my-app");
+      expect(JSON.parse(files["package.json"]!).dependencies["@layerhop/sdk"]).toBeTruthy();
+      expect(Object.values(files).join("\n")).not.toContain("{{name}}");
+      expect(files["README.md"]).toMatch(/never\s+holds keys/);
+    }
+    expect(Object.keys(renderTemplate("next", "x"))).toEqual(expect.arrayContaining(["app/page.tsx", "app/api/quote/route.ts", "app/layout.tsx"]));
+    expect(packageNameFrom("./My Cool App/")).toBe("my-cool-app");
+  });
+
+  it("scaffolds node (default) and next projects into a temp dir", async () => {
+    const cwd = mk();
+    const t = io(undefined, { cwd });
+    expect(await run(["init", "hello"], t.io)).toBe(0);
+    expect(readFileSync(join(cwd, "hello", "index.mjs"), "utf8")).toContain('from "@layerhop/sdk"');
+    expect(JSON.parse(readFileSync(join(cwd, "hello", "package.json"), "utf8")).name).toBe("hello");
+    expect(await run(["init", "next", "web"], t.io)).toBe(0);
+    expect(existsSync(join(cwd, "web", "app", "api", "quote", "route.ts"))).toBe(true);
+  });
+
+  it("refuses non-empty directories unless --force", async () => {
+    const cwd = mk();
+    writeFileSync(join(cwd, "keep.txt"), "x");
+    const t = io(undefined, { cwd });
+    expect(await run(["init", "node", "."], t.io)).toBe(2);
+    expect(t.err[0]).toMatch(/not empty/);
+    expect(await run(["init", "node", ".", "--force"], t.io)).toBe(0);
+    expect(existsSync(join(cwd, "index.mjs"))).toBe(true);
+    expect(await run(["init"], t.io)).toBe(2);
+  });
+});
+
+describe("devnet", () => {
+  it("starts the API with the mock provider inside the monorepo", async () => {
+    // A minimal fake monorepo, so the test also passes in the standalone layerhop-js export.
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "layerhop-mono-")));
+    tmp.push(root);
+    writeFileSync(join(root, "pnpm-workspace.yaml"), "packages: []\n");
+    mkdirSync(join(root, "services", "api"), { recursive: true });
+    writeFileSync(join(root, "services", "api", "package.json"), "{}");
+    const nested = join(root, "packages", "cli");
+    mkdirSync(nested, { recursive: true });
+    expect(findMonorepoRoot(nested)).toBe(root);
+
+    const spawn = vi.fn(async () => 0);
+    const t = io(undefined, { cwd: nested, spawn });
+    expect(await run(["devnet"], t.io)).toBe(0);
+    const [cmd, args, opts] = spawn.mock.calls[0] as unknown as [string, string[], { cwd: string; env: Record<string, string> }];
+    expect(cmd).toBe("pnpm");
+    expect(args).toEqual(["--filter", "@layerhop/api", "dev"]);
+    expect(opts.cwd).toBe(root);
+    expect(opts.env).toMatchObject(DEVNET_ENV);
+  });
+
+  it("explains itself outside the monorepo", async () => {
+    const spawn = vi.fn(async () => 0);
+    const t = io(undefined, { cwd: mkdtempSync(join(tmpdir(), "layerhop-nodev-")), spawn });
+    tmp.push(t.io.cwd);
+    expect(await run(["devnet"], t.io)).toBe(1);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(t.text()).toMatch(/LAYERHOP_ENABLE_MOCK=1 PROVIDERS=mock/);
+  });
+});

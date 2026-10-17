@@ -1,0 +1,376 @@
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { parseArgs } from "node:util";
+import { CHAINS, LayerHop, LayerHopApiError, TOKENS, findToken, getChain, type OrderStatus, type ProviderId, type QuoteResponse } from "@layerhop/sdk";
+import { formatSeconds, formatUnits, json, parseUnits, table } from "./format.js";
+import { buildSwapLink } from "./link.js";
+import { TEMPLATE_NAMES, packageNameFrom, renderTemplate, type TemplateName } from "./templates.js";
+
+export const VERSION = "0.1.0";
+export const DEFAULT_API_URL = "https://api.layerhop.com";
+
+export interface Io {
+  out: (s: string) => void;
+  err: (s: string) => void;
+  env: Record<string, string | undefined>;
+  cwd: string;
+  fetch: typeof fetch;
+  /** Starts a child process (devnet). Returns its exit code. */
+  spawn?: (cmd: string, args: string[], opts: { cwd: string; env: Record<string, string | undefined> }) => Promise<number>;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export const HELP = `layerhop ${VERSION} — LayerHop from your terminal
+
+Usage: layerhop <command> [args] [options]
+
+Commands:
+  chains                                      List supported chains
+  tokens <chain>                              List the built-in tokens of a chain
+  quote <amount> <token> <chain> <toToken> <toChain> --sender <addr> --recipient <addr>
+                                              Quote a swap. <amount> is in human units (100 = 100 USDC)
+                                              unless --base-units is given
+  status <provider> <txhash> [--watch]        Order status; --watch polls until filled/refunded/failed
+  link <amount> <token> <chain> <toToken> <toChain>
+                                              Print a layerhop.com/swap deep link (--embed for /embed)
+  init [node|next] <dir>                      Scaffold a minimal project using @layerhop/sdk
+  devnet                                      Run the local API with the mock provider (monorepo only)
+
+Global options:
+  --api-url <url>      API origin (env LAYERHOP_API_URL, default ${DEFAULT_API_URL})
+  --api-key <key>      API key (env LAYERHOP_API_KEY)
+  --json               Machine-readable output
+  -h, --help           Show help
+  -v, --version        Show version
+
+Quote options:  --sender --recipient --slippage-bps <n> --integrator <id> --base-units
+Link options:   --recipient --slippage-bps <n> --ref <ref> --integrator <id>
+                --embed --theme dark|light --accent <hex> --radius <px> --lock-src --lock-dst --hide-history
+Status options: --watch --interval <seconds>
+Init options:   --force (write into a non-empty directory)
+
+LayerHop never holds keys: the CLI quotes and tracks; your wallet signs.`;
+
+const OPTIONS = {
+  "api-url": { type: "string" },
+  "api-key": { type: "string" },
+  json: { type: "boolean" },
+  help: { type: "boolean", short: "h" },
+  version: { type: "boolean", short: "v" },
+  sender: { type: "string" },
+  recipient: { type: "string" },
+  "slippage-bps": { type: "string" },
+  integrator: { type: "string" },
+  "base-units": { type: "boolean" },
+  watch: { type: "boolean", short: "w" },
+  interval: { type: "string" },
+  ref: { type: "string" },
+  embed: { type: "boolean" },
+  theme: { type: "string" },
+  accent: { type: "string" },
+  radius: { type: "string" },
+  "lock-src": { type: "boolean" },
+  "lock-dst": { type: "boolean" },
+  "hide-history": { type: "boolean" },
+  force: { type: "boolean" },
+} as const;
+
+export type ParsedArgs = ReturnType<typeof parse>;
+
+export class UsageError extends Error {}
+
+export function parse(argv: string[]) {
+  try {
+    const { values, positionals } = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true, strict: true });
+    const [command, ...args] = positionals;
+    return { command, args, opts: values };
+  } catch (e) {
+    throw new UsageError((e as Error).message);
+  }
+}
+
+function int(v: string | undefined, name: string): number | undefined {
+  if (v === undefined) return undefined;
+  if (!/^\d+$/.test(v)) throw new UsageError(`--${name} must be a non-negative integer`);
+  return Number(v);
+}
+
+function need(args: string[], n: number, usage: string): string[] {
+  if (args.length < n) throw new UsageError(`Usage: layerhop ${usage}`);
+  return args;
+}
+
+function client(opts: ParsedArgs["opts"], io: Io): LayerHop {
+  return new LayerHop({
+    baseUrl: opts["api-url"] ?? io.env.LAYERHOP_API_URL ?? DEFAULT_API_URL,
+    apiKey: opts["api-key"] ?? io.env.LAYERHOP_API_KEY,
+    integrator: opts.integrator,
+    fetch: io.fetch,
+  });
+}
+
+function apiUrl(opts: ParsedArgs["opts"], io: Io): string {
+  return (opts["api-url"] ?? io.env.LAYERHOP_API_URL ?? DEFAULT_API_URL).replace(/\/$/, "");
+}
+
+/** GET a /v1 route the SDK has no method for; same error shape as the SDK. */
+async function apiGet<T>(path: string, opts: ParsedArgs["opts"], io: Io): Promise<T> {
+  const headers: Record<string, string> = {};
+  const key = opts["api-key"] ?? io.env.LAYERHOP_API_KEY;
+  if (key) headers["x-api-key"] = key;
+  const res = await io.fetch(`${apiUrl(opts, io)}/v1${path}`, { headers });
+  const body = (await res.json().catch(() => ({}))) as { error?: { code: string; message: string; requestId?: string } };
+  if (!res.ok) throw new LayerHopApiError(body.error?.code ?? "INTERNAL", body.error?.message ?? res.statusText, res.status, body.error?.requestId);
+  return body as T;
+}
+
+type Chain = (typeof CHAINS)[number];
+type Token = (typeof TOKENS)[number];
+
+export function resolveChain(v: string): Chain {
+  const c = getChain(v);
+  if (!c) throw new UsageError(`Unknown chain "${v}". Known: ${CHAINS.map((x) => x.slug).join(", ")}`);
+  return c;
+}
+
+/** The token's decimals from the built-in list, or undefined for unknown addresses. */
+export function tokenDecimals(chain: Chain, token: string): number | undefined {
+  return findToken(chain.id, token)?.decimals;
+}
+
+export function quoteRows(r: QuoteResponse, dstDecimals: number | undefined, dstSymbol: string): string[][] {
+  return r.quotes.map((q, i) => {
+    const fee = q.fees.ourFeeBps + (q.fees.integratorFeeBps ?? 0);
+    const amt = (v: string) => (dstDecimals === undefined ? v : `${formatUnits(v, dstDecimals)} ${dstSymbol}`);
+    return [
+      i === 0 ? "*" : "",
+      q.provider,
+      amt(q.dstAmount),
+      amt(q.dstAmountMin),
+      formatSeconds(q.estimatedSeconds),
+      `${fee} bps`,
+      q.fees.gasUsd !== undefined ? `$${q.fees.gasUsd.toFixed(2)}` : "-",
+      q.quoteId,
+    ];
+  });
+}
+
+async function cmdChains(p: ParsedArgs, io: Io): Promise<number> {
+  let chains: readonly Chain[];
+  try {
+    chains = (await apiGet<{ chains: Chain[] }>("/chains", p.opts, io)).chains;
+  } catch (e) {
+    if (e instanceof LayerHopApiError) throw e;
+    io.err(`warning: API unreachable (${(e as Error).message}); showing the built-in list`);
+    chains = CHAINS;
+  }
+  if (p.opts.json) io.out(json(chains));
+  else io.out(table(["ID", "SLUG", "NAME", "VM", "NATIVE"], chains.map((c) => [String(c.id), c.slug, c.name, c.vm, c.nativeSymbol])));
+  return 0;
+}
+
+async function cmdTokens(p: ParsedArgs, io: Io): Promise<number> {
+  const [chain] = need(p.args, 1, "tokens <chain>");
+  let tokens: readonly Token[];
+  try {
+    tokens = (await apiGet<{ tokens: Token[] }>(`/tokens?chain=${encodeURIComponent(chain!)}`, p.opts, io)).tokens;
+  } catch (e) {
+    if (e instanceof LayerHopApiError) throw e;
+    io.err(`warning: API unreachable (${(e as Error).message}); showing the built-in list`);
+    const c = resolveChain(chain!);
+    tokens = TOKENS.filter((t) => t.chainId === c.id);
+  }
+  if (p.opts.json) io.out(json(tokens));
+  else io.out(table(["SYMBOL", "DECIMALS", "ADDRESS"], tokens.map((t) => [t.symbol, String(t.decimals), t.address])));
+  return 0;
+}
+
+async function cmdQuote(p: ParsedArgs, io: Io): Promise<number> {
+  const [amount, token, chain, toToken, toChain] = need(p.args, 5, "quote <amount> <token> <chain> <toToken> <toChain> --sender <addr> --recipient <addr>") as [string, string, string, string, string];
+  const { sender, recipient } = p.opts;
+  if (!sender || !recipient) throw new UsageError("quote needs --sender and --recipient");
+  const src = resolveChain(chain);
+  const dst = resolveChain(toChain);
+  let base: string;
+  if (p.opts["base-units"]) {
+    if (!/^\d+$/.test(amount)) throw new UsageError("--base-units amount must be an integer string");
+    base = amount;
+  } else {
+    const d = tokenDecimals(src, token);
+    if (d === undefined) throw new UsageError(`"${token}" is not in the ${src.slug} token list; pass the amount in base units with --base-units`);
+    try {
+      base = parseUnits(amount, d);
+    } catch (e) {
+      throw new UsageError((e as Error).message);
+    }
+  }
+  if (base === "0") throw new UsageError("amount must be greater than 0");
+  const r = await client(p.opts, io).quote({
+    srcChain: src.slug, srcToken: token, amount: base, dstChain: dst.slug, dstToken: toToken, sender, recipient,
+    slippageBps: int(p.opts["slippage-bps"], "slippage-bps"),
+  });
+  if (p.opts.json) {
+    io.out(json(r));
+    return 0;
+  }
+  const dstTok = findToken(dst.id, toToken);
+  io.out(`${amount}${p.opts["base-units"] ? " (base units)" : ""} ${token} on ${src.name} -> ${toToken} on ${dst.name}\n`);
+  io.out(table(["", "PROVIDER", "YOU GET", "MIN", "ETA", "FEE", "GAS", "QUOTE ID"], quoteRows(r, dstTok?.decimals, dstTok?.symbol ?? toToken)));
+  for (const e of r.errors) io.err(`  ${e.provider}: ${e.code} ${e.message}`);
+  const secs = r.best.expiresAt - Math.floor(Date.now() / 1000);
+  io.out(`\n* best. Quotes expire in ${Math.max(0, secs)}s — build with POST /v1/orders { quoteId }.`);
+  return 0;
+}
+
+const FINAL = new Set<OrderStatus["state"]>(["filled", "refunded", "failed"]);
+
+function statusLine(s: OrderStatus): string {
+  return [s.state.toUpperCase(), s.srcTxHash ? `src ${s.srcTxHash}` : "", s.dstTxHash ? `dst ${s.dstTxHash}` : ""].filter(Boolean).join("  ");
+}
+
+async function cmdStatus(p: ParsedArgs, io: Io): Promise<number> {
+  const [provider, id] = need(p.args, 2, "status <provider> <txhash> [--watch]") as [ProviderId, string];
+  const lh = client(p.opts, io);
+  if (!p.opts.watch) {
+    const s = await lh.status(provider, id);
+    io.out(p.opts.json ? json(s) : statusLine(s));
+    return s.state === "failed" ? 1 : 0;
+  }
+  const intervalMs = (int(p.opts.interval, "interval") ?? 3) * 1000;
+  const sleep = io.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  let last: OrderStatus | undefined;
+  for (;;) {
+    const s = await lh.status(provider, id);
+    if (s.state !== last?.state) io.out(p.opts.json ? JSON.stringify(s) : `${new Date().toISOString()}  ${statusLine(s)}`);
+    last = s;
+    if (FINAL.has(s.state)) break;
+    await sleep(intervalMs);
+  }
+  return last.state === "filled" ? 0 : 1;
+}
+
+function cmdLink(p: ParsedArgs, io: Io): number {
+  const [amount, token, chain, toToken, toChain] = need(p.args, 5, "link <amount> <token> <chain> <toToken> <toChain>") as [string, string, string, string, string];
+  const o = p.opts;
+  const theme = o.theme;
+  if (theme !== undefined && theme !== "dark" && theme !== "light") throw new UsageError("--theme must be dark or light");
+  let url: string;
+  try {
+    url = buildSwapLink(
+      { srcChain: chain, srcToken: token, dstChain: toChain, dstToken: toToken, amount, recipient: o.recipient, slippageBps: int(o["slippage-bps"], "slippage-bps"), ref: o.ref, integrator: o.integrator },
+      { embed: o.embed ? { theme, accent: o.accent, radius: int(o.radius, "radius"), lockSrc: o["lock-src"], lockDst: o["lock-dst"], hideHistory: o["hide-history"] } : false },
+    );
+  } catch (e) {
+    if (e instanceof UsageError) throw e;
+    throw new UsageError((e as Error).message);
+  }
+  io.out(o.json ? json({ url }) : url);
+  return 0;
+}
+
+async function cmdInit(p: ParsedArgs, io: Io): Promise<number> {
+  let [a, b] = p.args;
+  let template: TemplateName = "node";
+  if (a && (TEMPLATE_NAMES as readonly string[]).includes(a)) {
+    template = a as TemplateName;
+    a = b;
+  }
+  if (!a) throw new UsageError("Usage: layerhop init [node|next] <dir>");
+  const dir = resolve(io.cwd, a);
+  if (existsSync(dir) && (await readdir(dir)).length > 0 && !p.opts.force) {
+    throw new UsageError(`${dir} is not empty (use --force to write into it)`);
+  }
+  const files = renderTemplate(template, packageNameFrom(a));
+  for (const [rel, content] of Object.entries(files)) {
+    const target = join(dir, rel);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, content);
+  }
+  if (p.opts.json) io.out(json({ template, dir, files: Object.keys(files) }));
+  else {
+    io.out(`Created a ${template} project in ${dir}:`);
+    for (const f of Object.keys(files)) io.out(`  ${f}`);
+    io.out(`\nNext:\n  cd ${a}\n  npm install\n  ${template === "next" ? "npm run dev" : "npm start"}`);
+  }
+  return 0;
+}
+
+/** Walks up from `start` to the LayerHop monorepo root (has services/api and pnpm-workspace.yaml). */
+export function findMonorepoRoot(start: string): string | undefined {
+  let dir = resolve(start);
+  for (;;) {
+    if (existsSync(join(dir, "pnpm-workspace.yaml")) && existsSync(join(dir, "services", "api", "package.json"))) return dir;
+    const up = dirname(dir);
+    if (up === dir) return undefined;
+    dir = up;
+  }
+}
+
+export const DEVNET_ENV = { LAYERHOP_ENABLE_MOCK: "1", PROVIDERS: "mock" } as const;
+
+async function cmdDevnet(p: ParsedArgs, io: Io): Promise<number> {
+  const root = findMonorepoRoot(io.cwd);
+  if (!root) {
+    io.out(`layerhop devnet runs the LayerHop API locally with the deterministic "mock" provider.
+It currently needs a checkout of the LayerHop monorepo:
+
+  git clone <layerhop repo> && cd layerhop && pnpm install
+  npx layerhop devnet           # or: LAYERHOP_ENABLE_MOCK=1 PROVIDERS=mock pnpm --filter @layerhop/api dev
+
+Then point the SDK or CLI at it: LAYERHOP_API_URL=http://localhost:8787
+Mock transactions are dummies — never broadcast them.`);
+    return 1;
+  }
+  const port = io.env.PORT ?? "8787";
+  io.err(`Starting the local API from ${root} with ${Object.entries(DEVNET_ENV).map(([k, v]) => `${k}=${v}`).join(" ")}`);
+  io.err(`Use it with: LAYERHOP_API_URL=http://localhost:${port} layerhop quote 100 USDC base SOL solana --sender ... --recipient ...`);
+  const run = io.spawn ?? defaultSpawn;
+  return run("pnpm", ["--filter", "@layerhop/api", "dev"], { cwd: root, env: { ...io.env, ...DEVNET_ENV } });
+}
+
+function defaultSpawn(cmd: string, args: string[], opts: { cwd: string; env: Record<string, string | undefined> }): Promise<number> {
+  return new Promise((res, rej) => {
+    const child = spawn(cmd, args, { cwd: opts.cwd, env: opts.env as NodeJS.ProcessEnv, stdio: "inherit" });
+    child.on("error", rej);
+    child.on("exit", (code) => res(code ?? 0));
+  });
+}
+
+/** Runs the CLI. Returns the process exit code; never calls process.exit. */
+export async function run(argv: string[], io: Io): Promise<number> {
+  try {
+    const p = parse(argv);
+    if (p.opts.version) {
+      io.out(VERSION);
+      return 0;
+    }
+    if (p.opts.help || !p.command || p.command === "help") {
+      io.out(HELP);
+      return p.command || p.opts.help ? 0 : 1;
+    }
+    switch (p.command) {
+      case "chains": return await cmdChains(p, io);
+      case "tokens": return await cmdTokens(p, io);
+      case "quote": return await cmdQuote(p, io);
+      case "status": return await cmdStatus(p, io);
+      case "link": return cmdLink(p, io);
+      case "init": return await cmdInit(p, io);
+      case "devnet": return await cmdDevnet(p, io);
+      default: throw new UsageError(`Unknown command "${p.command}". Run layerhop --help.`);
+    }
+  } catch (e) {
+    if (e instanceof UsageError) {
+      io.err(`error: ${e.message}`);
+      return 2;
+    }
+    if (e instanceof LayerHopApiError) {
+      io.err(`error: ${e.code}: ${e.message}${e.requestId ? ` (requestId ${e.requestId})` : ""}`);
+      io.err(`  https://docs.layerhop.com/errors/${e.code}`);
+      return 1;
+    }
+    io.err(`error: ${(e as Error).message}`);
+    return 1;
+  }
+}

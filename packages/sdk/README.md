@@ -1,0 +1,87 @@
+# @layerhop/sdk
+
+Typed TypeScript client for the [LayerHop API](https://docs.layerhop.com): best-price cross-chain and
+same-chain swaps across EVM chains and Solana through one non-custodial API.
+
+- **Zero runtime dependencies.** Uses the global `fetch`; works in Node 18+, browsers, Deno, Bun and edge runtimes.
+- **ESM + CommonJS** builds with bundled type definitions.
+- **Never holds keys.** It fetches quotes and builds *unsigned* transactions; your wallet signs.
+
+## Install
+
+```bash
+npm install @layerhop/sdk
+# or: pnpm add @layerhop/sdk / yarn add @layerhop/sdk / bun add @layerhop/sdk
+```
+
+## Quickstart
+
+Amounts are always **integer strings in base units** (100 USDC = `"100000000"`), never floats.
+
+```ts
+import { LayerHop, LayerHopApiError } from "@layerhop/sdk";
+
+const lh = new LayerHop({ apiKey: process.env.LAYERHOP_API_KEY, integrator: "myapp" });
+
+// 1. Quote every provider; `best` is the highest output for the user.
+const { best } = await lh.quote({
+  srcChain: "base", srcToken: "USDC", amount: "100000000",
+  dstChain: "solana", dstToken: "SOL",
+  sender: "0xYourEvmAddress", recipient: "YourSolanaAddress",
+});
+
+// 2. Build the unsigned transaction (EVM txs may include an `approval` to send first).
+const tx = await lh.buildTx(best.quoteId);
+
+// 3. Sign and send with your own wallet stack (viem, ethers, wallet adapter...), then report it.
+//    const hash = await wallet.sendTransaction(tx);
+//    await lh.reportSubmitted(best.quoteId, hash);
+
+// 4. Track until filled / refunded / failed.
+//    for await (const s of lh.watch(best.provider, hash)) console.log(s.state);
+```
+
+Errors are thrown as `LayerHopApiError` with a stable `code` (see the
+[error catalog](https://docs.layerhop.com/errors)):
+
+```ts
+try {
+  await lh.buildTx(quoteId);
+} catch (e) {
+  if (e instanceof LayerHopApiError && e.code === "QUOTE_EXPIRED") {
+    // re-quote
+  }
+}
+```
+
+## API
+
+| Method | Endpoint | What |
+|---|---|---|
+| `quote(params)` | `GET /v1/quote` | Every successful quote, best for the user first. |
+| `buildTx(quoteId)` | `POST /v1/orders` | The unsigned transaction for a quote (`EvmTx` or `SvmTx`). |
+| `submit(quoteId, signedTx)` | `POST /v1/orders/submit` | Solana txs with `submitViaApi`: send the signed tx through LayerHop. |
+| `reportSubmitted(quoteId, txHash)` | `POST /v1/orders/{quoteId}/submitted` | Tell LayerHop the tx was broadcast. |
+| `simulate(quoteId)` | `POST /v1/simulate` | Dry-run the tx (EVM `eth_call` + gas, Solana `simulateTransaction`). |
+| `listOrders(params)` | `GET /v1/orders` | Orders from or to an address, newest first. |
+| `status(provider, id)` | `GET /v1/orders/{provider}/{id}` | Order status. |
+| `watch(provider, id, opts?)` | polls `status` | Async generator yielding each state change until final. |
+
+Options for `new LayerHop(options)`: `baseUrl` (default `https://api.layerhop.com`), `apiKey`,
+`channel`, `integrator`, `integratorFeeBps`, `fetch`.
+
+The package also exports the chain and token registry (`CHAINS`, `getChain`, `TOKENS`, `findToken`,
+`SOLANA_CHAIN_ID`, `EVM_NATIVE`, `SOL_NATIVE`) and all request/response types.
+
+Full reference: <https://docs.layerhop.com/sdk>.
+
+## Related packages
+
+- [`@layerhop/react`](https://www.npmjs.com/package/@layerhop/react) — React hooks (`useQuote`, `useSwap`, ...).
+- [`@layerhop/widget`](https://www.npmjs.com/package/@layerhop/widget) — embeddable swap widget.
+- [`@layerhop/cli`](https://www.npmjs.com/package/@layerhop/cli) — command line.
+- [`@layerhop/mcp`](https://www.npmjs.com/package/@layerhop/mcp) — MCP server for AI agents.
+
+## License
+
+MIT

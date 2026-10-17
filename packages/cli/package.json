@@ -1,0 +1,51 @@
+{
+  "name": "@layerhop/cli",
+  "version": "0.1.0",
+  "description": "LayerHop command line: quotes, order status, deep links, project scaffolding and a local mock devnet",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "layerhop": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "layerhop",
+    "cli",
+    "bridge",
+    "swap",
+    "cross-chain"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@layerhop/sdk": "workspace:^",
+    "@layerhop/shared": "workspace:*",
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/layerhop/layerhop-js.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://docs.layerhop.com",
+  "bugs": {
+    "url": "https://github.com/layerhop/layerhop-js/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

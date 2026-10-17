@@ -1,0 +1,20 @@
+{
+  "name": "layerhop-js",
+  "private": true,
+  "description": "LayerHop JavaScript/TypeScript SDKs: @layerhop/sdk, react, widget, cli and mcp",
+  "license": "MIT",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r run build",
+    "test": "pnpm -r run test",
+    "typecheck": "pnpm -r run typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

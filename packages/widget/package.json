@@ -1,0 +1,93 @@
+{
+  "name": "@layerhop/widget",
+  "version": "0.1.0",
+  "description": "Embed the LayerHop cross-chain swap widget in any site: React component, framework-agnostic mount() and a drop-in <script> tag",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./react": {
+      "import": {
+        "types": "./dist/react.d.ts",
+        "default": "./dist/react.js"
+      },
+      "require": {
+        "types": "./dist/react.d.cts",
+        "default": "./dist/react.cjs"
+      }
+    },
+    "./embed.js": "./dist/embed.js",
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "react": [
+        "./dist/react.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": [
+    "./dist/embed.js"
+  ],
+  "keywords": [
+    "layerhop",
+    "bridge",
+    "swap",
+    "cross-chain",
+    "widget",
+    "embed",
+    "iframe"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc -p ."
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.7",
+    "@types/react-dom": "^19.0.3",
+    "jsdom": "^25.0.1",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/layerhop/layerhop-js.git",
+    "directory": "packages/widget"
+  },
+  "homepage": "https://docs.layerhop.com",
+  "bugs": {
+    "url": "https://github.com/layerhop/layerhop-js/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LayerHop widget demo</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; padding: 24px 16px; background: #0b0f17; color: #e6edf3; font: 14px/1.5 system-ui, sans-serif; }
+      main { max-width: 1040px; margin: 0 auto; display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+      h1 { max-width: 1040px; margin: 0 auto 16px; font-size: 20px; }
+      h2 { font-size: 15px; margin: 0 0 8px; }
+      pre { background: #111827; padding: 12px; border-radius: 8px; max-height: 320px; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+    </style>
+  </head>
+  <body>
+    <!--
+      Local dev: run apps/web on :3000, build this package (pnpm --filter @layerhop/widget build),
+      then serve this folder's parent, e.g. `npx serve packages/widget` and open /example/.
+    -->
+    <h1>LayerHop widget demo (local: http://localhost:3000/embed)</h1>
+    <main>
+      <section>
+        <h2>1. Auto-init from data attributes</h2>
+        <div
+          id="auto"
+          data-layerhop-widget
+          data-base-url="http://localhost:3000"
+          data-src-chain="base"
+          data-src-token="USDC"
+          data-dst-chain="solana"
+          data-dst-token="SOL"
+          data-theme="dark"
+          data-accent="#22d3ee"
+          data-integrator="demo"
+        ></div>
+      </section>
+      <section>
+        <h2>2. Programmatic mount()</h2>
+        <div id="manual"></div>
+        <p>
+          <button id="light">Light theme</button>
+          <button id="amount">Amount = 250</button>
+          <button id="destroy">Destroy</button>
+        </p>
+      </section>
+      <section>
+        <h2>Events</h2>
+        <pre id="log"></pre>
+      </section>
+    </main>
+
+    <script src="../dist/embed.js"></script>
+    <script>
+      const log = (label, payload) => {
+        const el = document.getElementById("log");
+        el.textContent = `${new Date().toLocaleTimeString()} ${label} ${JSON.stringify(payload)}\n` + el.textContent;
+      };
+
+      // Events from auto-initialized widgets bubble as `layerhop:<type>` DOM events.
+      for (const type of ["ready", "quote", "submitted", "status", "error", "resize"]) {
+        document.getElementById("auto").addEventListener(`layerhop:${type}`, (e) => log(`[auto] ${type}`, e.detail));
+      }
+
+      const widget = window.LayerHop.mount("#manual", {
+        baseUrl: "http://localhost:3000",
+        srcChain: "arbitrum",
+        srcToken: "USDC",
+        dstChain: "base",
+        dstToken: "ETH",
+        amount: "100",
+        lockDst: true,
+        onReady: (p) => log("[manual] ready", p),
+        onQuote: (p) => log("[manual] quote", p),
+        onSubmitted: (p) => log("[manual] submitted", p),
+        onStatus: (p) => log("[manual] status", p),
+        onError: (p) => log("[manual] error", p),
+        onResize: (p) => log("[manual] resize", p),
+      });
+      document.getElementById("light").onclick = () => widget.update({ theme: "light" });
+      document.getElementById("amount").onclick = () => widget.update({ amount: "250" });
+      document.getElementById("destroy").onclick = () => widget.destroy();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@layerhop/shared": ["../shared/src/index.ts"] }
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
+}
