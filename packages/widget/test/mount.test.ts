@@ -28,7 +28,7 @@ describe("mount", () => {
     expect(f.style.maxWidth).toBe("480px");
     expect(f.style.height).toBe("640px");
     expect(f.style.getPropertyValue("border-style") || f.style.border).toMatch(/0|none/);
-    expect(f.style.colorScheme).toBe("light");
+    expect(f.style.colorScheme).toBe("normal");
   });
 
   it("throws for a missing selector", () => {
@@ -130,7 +130,7 @@ describe("mount", () => {
     handle.update({ amount: "5" });
     expect(setSrc).toHaveBeenCalledTimes(1);
     handle.update({ theme: "light" });
-    expect(f.style.colorScheme).toBe("light");
+    expect(f.style.colorScheme).toBe("normal");
 
     const first = vi.fn();
     const second = vi.fn();

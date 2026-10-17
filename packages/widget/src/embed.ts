@@ -5,6 +5,7 @@
 import { autoInit } from "./auto-init";
 
 export { mount, buildEmbedUrl, DEFAULT_BASE_URL, LayerHopWidgetError } from "./core";
+export { PRESETS, PRESET_IDS } from "./presets";
 export { autoInit, getWidget } from "./auto-init";
 
 if (typeof document !== "undefined") {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, type CSSProperties } from "react";
-import { buildEmbedUrl, mount, type MountOptions, type WidgetHandle, type WidgetOptions } from "./core";
+import { WIDGET_OPTION_KEYS, buildEmbedUrl, mount, type MountOptions, type WidgetHandle, type WidgetOptions } from "./core";
 
 export type * from "./core";
 
@@ -12,8 +12,9 @@ export interface LayerHopWidgetProps extends MountOptions {
 
 /**
  * React wrapper around `mount()`. URL options trigger an iframe reload only when the resulting
- * URL changes; callbacks can change freely without reloading. Changing `baseUrl`, `autoResize`,
- * `height`, `maxWidth` or `title` remounts the iframe.
+ * URL changes (with `liveUpdates`, amount/token/theme/color changes apply in place); callbacks can
+ * change freely without reloading. Changing `baseUrl`, `autoResize`, `height`, `maxWidth`, `title`
+ * or `liveUpdates` remounts the iframe.
  */
 export function LayerHopWidget(props: LayerHopWidgetProps) {
   const {
@@ -24,12 +25,17 @@ export function LayerHopWidget(props: LayerHopWidgetProps) {
     height,
     maxWidth,
     title,
+    liveUpdates,
     onReady: _onReady,
     onQuote: _onQuote,
     onSubmitted: _onSubmitted,
     onStatus: _onStatus,
     onError: _onError,
     onResize: _onResize,
+    onRoutes: _onRoutes,
+    onWalletConnected: _onWalletConnected,
+    onWalletDisconnected: _onWalletDisconnected,
+    onAmountChanged: _onAmountChanged,
     onEvent: _onEvent,
     ...urlOptions
   } = props;
@@ -54,12 +60,17 @@ export function LayerHopWidget(props: LayerHopWidgetProps) {
       height,
       maxWidth,
       title,
+      liveUpdates,
       onReady: (p) => propsRef.current.onReady?.(p),
       onQuote: (p) => propsRef.current.onQuote?.(p),
       onSubmitted: (p) => propsRef.current.onSubmitted?.(p),
       onStatus: (p) => propsRef.current.onStatus?.(p),
       onError: (p) => propsRef.current.onError?.(p),
       onResize: (p) => propsRef.current.onResize?.(p),
+      onRoutes: (p) => propsRef.current.onRoutes?.(p),
+      onWalletConnected: (p) => propsRef.current.onWalletConnected?.(p),
+      onWalletDisconnected: (p) => propsRef.current.onWalletDisconnected?.(p),
+      onAmountChanged: (p) => propsRef.current.onAmountChanged?.(p),
       onEvent: (m) => propsRef.current.onEvent?.(m),
     });
     handleRef.current = handle;
@@ -67,16 +78,11 @@ export function LayerHopWidget(props: LayerHopWidgetProps) {
       handle.destroy();
       if (handleRef.current === handle) handleRef.current = null;
     };
-  }, [baseUrl, autoResize, height, maxWidth, title]);
+  }, [baseUrl, autoResize, height, maxWidth, title, liveUpdates]);
 
   useEffect(() => {
     // Replace (not merge) URL options so removed props are cleared too.
-    const cleared: WidgetOptions = {
-      srcChain: undefined, srcToken: undefined, dstChain: undefined, dstToken: undefined,
-      amount: undefined, recipient: undefined, slippageBps: undefined, theme: undefined,
-      accent: undefined, radius: undefined, lockSrc: undefined, lockDst: undefined,
-      hideHistory: undefined, integrator: undefined,
-    };
+    const cleared = Object.fromEntries(WIDGET_OPTION_KEYS.map((k) => [k, undefined])) as WidgetOptions;
     handleRef.current?.update({ ...cleared, ...urlOptionsRef.current });
   }, [src]);
 

@@ -4,6 +4,9 @@ Embed the LayerHop cross-chain swap card in any site. The widget is an `<iframe>
 `https://layerhop.com/embed`, configured through URL params. It reports back to your page through
 `postMessage` events. Both the params and the events follow [`docs/URL_CONTRACT.md`](../../docs/URL_CONTRACT.md).
 
+Design it visually first at [layerhop.com/developers/widget](https://layerhop.com/developers/widget):
+the builder previews the real widget and generates the code for each option below.
+
 There are three ways to use it:
 
 - the framework-agnostic `mount()`
@@ -61,6 +64,7 @@ const widget = mount("#swap", {
 });
 
 widget.update({ amount: "250", theme: "light" }); // merges options; reloads only if the URL changes
+// With mount(..., { liveUpdates: true }) amount, token, theme and color changes apply in place.
 widget.destroy(); // removes the iframe and the message listener
 ```
 
@@ -75,7 +79,7 @@ buildEmbedUrl({ srcChain: "base", lockSrc: true }); // https://layerhop.com/embe
 
 ```html
 <div data-layerhop-widget data-src-chain="base" data-dst-chain="solana" data-theme="dark"></div>
-<script src="https://unpkg.com/@layerhop/widget@0.1.0/dist/embed.js"></script>
+<script src="https://unpkg.com/@layerhop/widget@0.2.0/dist/embed.js"></script>
 <script>
   document.querySelector("[data-layerhop-widget]")
     .addEventListener("layerhop:quote", (e) => console.log(e.detail));
@@ -90,39 +94,159 @@ buildEmbedUrl({ srcChain: "base", lockSrc: true }); // https://layerhop.com/embe
 - `embed.js` mounts every `[data-layerhop-widget]` element once the DOM is ready.
 - Each option is a kebab-case data attribute: `data-src-chain`, `data-src-token`, `data-dst-chain`,
   `data-dst-token`, `data-amount`, `data-recipient`, `data-slippage-bps`, `data-theme`,
-  `data-accent`, `data-radius`, `data-lock-src`, `data-lock-dst`, `data-hide-history`,
-  `data-integrator`, `data-base-url`, `data-height`, `data-max-width` and `data-auto-resize`.
-- Flags are on when the attribute is empty, `1`, `true` or `yes`.
+  `data-preset`, `data-accent`, `data-accent-text`, `data-bg`, `data-surface`, `data-surface-alt`,
+  `data-text`, `data-text-muted`, `data-border-color`, `data-success`, `data-warning`,
+  `data-danger`, `data-radius`, `data-radius-inner`, `data-font`, `data-font-scale`,
+  `data-density`, `data-width`, `data-shadow`, `data-border`, `data-header-title`, `data-hide-header`,
+  `data-logo`, `data-button-label`, `data-show-usd`, `data-from-chains`, `data-to-chains`,
+  `data-exclude-chains`, `data-from-tokens`, `data-to-tokens`, `data-lock-src`, `data-lock-dst`,
+  `data-lock-amount`, `data-lock-recipient`, `data-hide-routes`, `data-hide-settings`,
+  `data-hide-history`, `data-hide-powered-by`, `data-locale`, `data-allow-parent-origin`,
+  `data-integrator`, `data-base-url`, `data-height`, `data-max-width`, `data-auto-resize` and
+  `data-live-updates`. Lists are comma-separated.
+- Flags are on when the attribute is empty, `1`, `true` or `yes`, and off for `0`.
 - Events are re-dispatched on the element as bubbling `layerhop:<type>` CustomEvents, with the
   payload in `event.detail`.
 - For elements you add later, call `window.LayerHop.autoInit()`. It skips elements that are
   already mounted.
 - `window.LayerHop` exposes `mount`, `buildEmbedUrl`, `autoInit`, `getWidget`,
-  `LayerHopWidgetError` and `DEFAULT_BASE_URL`.
+  `LayerHopWidgetError`, `DEFAULT_BASE_URL`, `PRESETS` and `PRESET_IDS`.
 
 ## Options
 
-| Option | Type | URL param | Notes |
-|---|---|---|---|
-| `srcChain` / `dstChain` | `string \| number` | same | chain slug (`base`) or id |
-| `srcToken` / `dstToken` | `string` | same | symbol, address or mint |
-| `amount` | `string` | `amount` | **human units**, e.g. `"100"` or `"0.5"` |
-| `recipient` | `string` | `recipient` | prefilled, but the user can edit it |
-| `slippageBps` | `number` | `slippageBps` | integer from 0 to 10000 |
-| `theme` | `"dark" \| "light"` | `theme` | default is `dark`; also sets the iframe's `color-scheme` |
-| `accent` | `string` | `accent` | hex color; `#` is stripped, and it is validated as 3, 4, 6 or 8 hex digits |
-| `radius` | `number` | `radius` | card corner radius in px |
-| `lockSrc` / `lockDst` | `boolean` | `=1` | locks chain and token |
-| `hideHistory` | `boolean` | `=1` | |
-| `integrator` | `string` | `integrator` | must match `[a-z0-9-]{1,32}`. Your partner id: registered partners earn their partner fee on every swap ([guide](https://docs.layerhop.com/guides/partner-fees)) |
-| `baseUrl` | `string` | — | default `https://layerhop.com`; `/embed` is appended. For local dev, use `http://localhost:3000` |
-| `autoResize` | `boolean` | — | default `true`; follows `resize` events |
-| `height` | `number` | — | initial height, default 640 px |
-| `maxWidth` | `number \| string` | — | default 480 px; the width is always `100%` |
-| `title` | `string` | — | the iframe title, default `"LayerHop swap"` |
+Every option maps to one embed URL param of the same name, except `borderColor` (the `border`
+param with a hex value) and `headerTitle` (the `title` param). See [`docs/URL_CONTRACT.md`](../../docs/URL_CONTRACT.md).
+
+**Swap**
+
+| Option | Type | Notes |
+|---|---|---|
+| `srcChain` / `dstChain` | `string \| number` | chain slug (`base`) or id |
+| `srcToken` / `dstToken` | `string` | symbol, address or mint |
+| `amount` | `string` | **human units**, e.g. `"100"` or `"0.5"` |
+| `recipient` | `string` | prefilled, but editable unless `lockRecipient` |
+| `slippageBps` | `number` | integer from 0 to 10000 |
+| `integrator` | `string` | must match `[a-z0-9-]{1,32}`. Your partner id: registered partners earn their partner fee on every swap ([guide](https://docs.layerhop.com/guides/partner-fees)) |
+
+**Theme**
+
+| Option | Type | Notes |
+|---|---|---|
+| `theme` | `"dark" \| "light" \| "auto"` | default `dark` (or the preset's own default); `auto` follows the visitor's setting |
+| `preset` | `"midnight" \| "paper" \| "lime" \| "ocean" \| "mono"` | a full dark + light palette; explicit colors override it |
+| `accent` | `string` | hex; 3, 4, 6 or 8 digits accepted (the embed uses 3 or 6) |
+| `accentText`, `bg`, `surface`, `surfaceAlt`, `text`, `textMuted`, `borderColor`, `success`, `warning`, `danger` | `string` | hex, 3 or 6 digits, `#` optional. Unreadable `accentText` is replaced automatically |
+| `radius` | `number` | card corner radius in px (the embed caps it at 40) |
+| `radiusInner` | `number` | fields and buttons, 0–32 px |
+| `font` | `"inter" \| "system" \| "space-grotesk" \| "ibm-plex-sans" \| "dm-sans" \| "manrope"` | the last three load from Google Fonts only when chosen |
+| `fontScale` | `number` | 0.875–1.125 |
+| `density` | `"compact" \| "comfortable"` | |
+| `width` | `number` | max card width, 320–720 px; also widens the iframe (`width + 16`) unless `maxWidth` is set |
+| `shadow` | `"none" \| "soft" \| "strong"` | |
+| `border` | `boolean` | `false` removes the card outline, `true` strengthens it. Can't be combined with `borderColor` |
+
+**Content and behaviour**
+
+| Option | Type | Notes |
+|---|---|---|
+| `headerTitle` | `string` | header text, up to 32 characters (URL param `title`; `title` stays the iframe title) |
+| `logo` | `string` | `https` image URL shown next to the title |
+| `buttonLabel` | `string` | main button label once ready, up to 24 characters |
+| `hideHeader` | `boolean` | hides title, wallet button, history and settings |
+| `showUsd` | `boolean` | default `true` |
+| `fromChains` / `toChains` / `excludeChains` | `(string \| number)[]` | chain allow-lists / deny-list |
+| `fromTokens` / `toTokens` | `string[]` | `"chain:addressOrSymbol"` entries, or bare symbols |
+| `lockSrc` / `lockDst` | `boolean` | locks that side's chain and token |
+| `lockAmount` | `boolean` | |
+| `lockRecipient` | `boolean` | requires `recipient` |
+| `hideRoutes` / `hideSettings` / `hideHistory` | `boolean` | |
+| `hidePoweredBy` | `boolean` | requires `integrator`; the embed honours it once your id is confirmed as a registered partner |
+| `locale` | `"en"` | |
+| `allowParentOrigin` | `string` | origin allowed to send `setParams`; `liveUpdates` sets it for you |
+
+**Mount only**
+
+| Option | Type | Notes |
+|---|---|---|
+| `baseUrl` | `string` | default `https://layerhop.com`; `/embed` is appended. For local dev, use `http://localhost:3000` |
+| `autoResize` | `boolean` | default `true`; follows `resize` events |
+| `height` | `number` | initial height, default 640 px |
+| `maxWidth` | `number \| string` | default 480 px (or `width + 16`); the width is always `100%` |
+| `title` | `string` | the iframe title, default `"LayerHop swap"` |
+| `liveUpdates` | `boolean` | `update()` sends amount, token, theme and color changes to the running widget instead of reloading it |
 
 Invalid values throw a `LayerHopWidgetError` when you call `buildEmbedUrl`, `mount` or `update`.
 This makes integration bugs show up early. The embed page itself silently ignores bad params.
+
+The iframe always gets `color-scheme: normal`, which matches the embed page. A different value
+(for example inherited from a page with `color-scheme: dark`) makes browsers paint an opaque box
+behind the transparent widget.
+
+### Presets
+
+```ts
+import { PRESETS, PRESET_IDS } from "@layerhop/widget"; // also exported as WIDGET_PRESETS
+PRESETS.ocean.dark.accent; // "38bdf8"
+```
+
+Each preset has `label`, `description`, `defaultTheme` and full `dark` / `light` palettes (hex
+without `#`), handy for matching the rest of your page to the widget.
+
+## Recipes
+
+**Deposit into your dApp.** Any token on any chain in, USDC on Base out, always to your contract:
+
+```tsx
+<LayerHopWidget
+  dstChain="base"
+  dstToken="USDC"
+  lockDst
+  recipient="0xYourDepositContract"
+  lockRecipient
+  headerTitle="Deposit to Acme"
+  buttonLabel="Deposit"
+  integrator="acme"
+  onStatus={(s) => s.state === "filled" && refreshBalance()}
+/>
+```
+
+**Single-chain swap.** Solana only, best route only:
+
+```ts
+mount("#swap", {
+  fromChains: ["solana"],
+  toChains: ["solana"],
+  srcChain: "solana",
+  srcToken: "USDC",
+  dstChain: "solana",
+  dstToken: "SOL",
+  hideRoutes: true,
+});
+```
+
+**Branded theme.** A preset as the base, your accent, font and logo, following light/dark:
+
+```html
+<div
+  data-layerhop-widget
+  data-preset="midnight"
+  data-theme="auto"
+  data-accent="ff5c8a"
+  data-accent-text="ffffff"
+  data-font="manrope"
+  data-radius="20"
+  data-radius-inner="12"
+  data-logo="https://acme.xyz/logo.svg"
+  data-header-title="Acme Swap"
+></div>
+```
+
+**Drive it from your page.** With `liveUpdates`, `update()` changes the running widget in place:
+
+```ts
+const w = mount("#swap", { liveUpdates: true, dstChain: "base", dstToken: "USDC" });
+priceInput.addEventListener("input", () => w.update({ amount: priceInput.value }));
+```
 
 ## Events
 
@@ -142,10 +266,16 @@ The widget accepts a message only if all of these are true:
 | `onStatus` | `status` | `{ provider, srcTxHash, state }` where state is `pending`, `filled`, `refunded` or `failed` |
 | `onError` | `error` | `{ code, message }` |
 | `onResize` | `resize` | `{ height }` in px; the iframe is resized automatically unless `autoResize: false` |
+| `onRoutes` | `routes` | `{ count, provider }`: routes that answered and the best one's provider |
+| `onWalletConnected` | `walletConnected` | `{ vm, address }` with `vm` `"evm"` or `"svm"` |
+| `onWalletDisconnected` | `walletDisconnected` | `{ vm, address }` |
+| `onAmountChanged` | `amountChanged` | `{ amount, srcChain, srcToken }`, debounced, user edits only |
 | `onEvent` | any | the full `{ source, type, payload }` message |
 
 All payload types are exported: `ReadyEvent`, `QuoteEvent`, `SubmittedEvent`, `StatusEvent`,
-`ErrorEvent`, `ResizeEvent`, `WidgetEventMap` and `WidgetMessage`. Payloads never contain secrets.
+`ErrorEvent`, `ResizeEvent`, `RoutesEvent`, `WalletEvent`, `AmountChangedEvent`, `WidgetEventMap`
+and `WidgetMessage`. Payloads never contain secrets. The new events need embed protocol 1.1
+(`ready.version` ≥ `1.1.0`).
 
 ## Development
 

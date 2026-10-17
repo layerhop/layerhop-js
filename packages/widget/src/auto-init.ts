@@ -1,8 +1,13 @@
 import {
+  COLOR_OPTIONS,
   mount,
   type MountOptions,
+  type WidgetDensity,
+  type WidgetFont,
   type WidgetHandle,
   type WidgetMessage,
+  type WidgetPreset,
+  type WidgetShadow,
   type WidgetTheme,
 } from "./core";
 
@@ -23,40 +28,54 @@ function int(value: string | undefined): number | undefined {
   return Number(value.trim());
 }
 
+function list(value: string | undefined): string[] | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  return value.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+/** Boolean options, read as flags (`data-lock-amount`, `data-show-usd="0"`, …). */
+const FLAG_OPTIONS = [
+  "lockSrc", "lockDst", "lockAmount", "lockRecipient", "hideHistory", "hideHeader", "hideRoutes", "hideSettings", "hidePoweredBy",
+  "showUsd", "border", "autoResize", "liveUpdates",
+] as const;
+
+/** Plain string options. */
+const STRING_OPTIONS = [
+  "srcChain", "srcToken", "dstChain", "dstToken", "amount", "recipient", "accent", "integrator", "baseUrl",
+  "headerTitle", "logo", "buttonLabel", "allowParentOrigin", ...(Object.keys(COLOR_OPTIONS) as (keyof typeof COLOR_OPTIONS)[]),
+] as const;
+
 /**
  * Read mount options from `data-*` attributes:
- * data-src-chain, data-src-token, data-dst-chain, data-dst-token, data-amount, data-recipient,
- * data-slippage-bps, data-theme, data-accent, data-radius, data-lock-src, data-lock-dst,
- * data-hide-history, data-integrator, data-base-url, data-height, data-max-width, data-auto-resize.
+ * every option as its kebab-case name (`srcChain` → `data-src-chain`, `borderColor` →
+ * `data-border-color`). Lists (`data-from-chains`, `data-to-tokens`, …) are comma-separated.
+ * Flags are on when the attribute is empty, `1`, `true` or `yes`; `"0"` turns them off.
  */
 export function optionsFromDataset(el: HTMLElement): MountOptions {
   const d = el.dataset;
   const o: MountOptions = {};
-  if (d.srcChain) o.srcChain = d.srcChain;
-  if (d.srcToken) o.srcToken = d.srcToken;
-  if (d.dstChain) o.dstChain = d.dstChain;
-  if (d.dstToken) o.dstToken = d.dstToken;
-  if (d.amount) o.amount = d.amount;
-  if (d.recipient) o.recipient = d.recipient;
-  const slippage = int(d.slippageBps);
-  if (slippage !== undefined) o.slippageBps = slippage;
+  const out = o as Record<string, unknown>;
+  for (const k of STRING_OPTIONS) if (d[k]) out[k] = d[k];
+  for (const k of FLAG_OPTIONS) {
+    const v = flag(d[k]);
+    if (v !== undefined) out[k] = v;
+  }
+  for (const k of ["slippageBps", "radius", "radiusInner", "width", "height"] as const) {
+    const v = int(d[k]);
+    if (v !== undefined) out[k] = v;
+  }
+  for (const k of ["fromChains", "toChains", "excludeChains", "fromTokens", "toTokens"] as const) {
+    const v = list(d[k]);
+    if (v) out[k] = v;
+  }
   if (d.theme) o.theme = d.theme as WidgetTheme;
-  if (d.accent) o.accent = d.accent;
-  const radius = int(d.radius);
-  if (radius !== undefined) o.radius = radius;
-  const lockSrc = flag(d.lockSrc);
-  if (lockSrc !== undefined) o.lockSrc = lockSrc;
-  const lockDst = flag(d.lockDst);
-  if (lockDst !== undefined) o.lockDst = lockDst;
-  const hideHistory = flag(d.hideHistory);
-  if (hideHistory !== undefined) o.hideHistory = hideHistory;
-  if (d.integrator) o.integrator = d.integrator;
-  if (d.baseUrl) o.baseUrl = d.baseUrl;
-  const height = int(d.height);
-  if (height !== undefined) o.height = height;
+  if (d.preset) o.preset = d.preset as WidgetPreset;
+  if (d.font) o.font = d.font as WidgetFont;
+  if (d.density) o.density = d.density as WidgetDensity;
+  if (d.shadow) o.shadow = d.shadow as WidgetShadow;
+  if (d.locale) o.locale = d.locale as "en";
+  if (d.fontScale) o.fontScale = Number(d.fontScale);
   if (d.maxWidth) o.maxWidth = /^\d+$/.test(d.maxWidth) ? Number(d.maxWidth) : d.maxWidth;
-  const autoResize = flag(d.autoResize);
-  if (autoResize !== undefined) o.autoResize = autoResize;
   return o;
 }
 
