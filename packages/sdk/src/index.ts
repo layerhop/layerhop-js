@@ -1,6 +1,11 @@
-import type { BuiltTx, FeeBreakdown, FeeChannel, OrderStatus, ProviderId } from "@layerhop/shared";
+import type {
+  BalancesResponse, BuiltTx, ChainInfo, FeeBreakdown, FeeChannel, OrderStatus, PricesResponse, ProviderId, TokenInfo, TokensResponse,
+} from "@layerhop/shared";
 
-export type { BuiltTx, EvmTx, SvmTx, OrderStatus, ProviderId, FeeChannel, FeeBreakdown } from "@layerhop/shared";
+export type {
+  BuiltTx, EvmTx, SvmTx, OrderStatus, ProviderId, FeeChannel, FeeBreakdown,
+  ChainInfo, TokenInfo, Balance, TokensResponse, PricesResponse, BalancesResponse,
+} from "@layerhop/shared";
 export { CHAINS, TOKENS, getChain, findToken, SOLANA_CHAIN_ID, EVM_NATIVE, SOL_NATIVE } from "@layerhop/shared";
 
 export interface LayerHopOptions {
@@ -115,6 +120,20 @@ export interface SimulationResponse {
   tx: BuiltTx;
 }
 
+export interface TokensParams {
+  /** Chain id or slug. */
+  chain: string | number;
+  /** Symbol, name or exact address / mint. */
+  q?: string;
+  /** 1–200, default 50. */
+  limit?: number;
+  /** `nextCursor` from the previous page. */
+  cursor?: string;
+}
+
+/** A token for `prices()`: `"chainId:address"` or `{ chainId, address }`. */
+export type PriceId = string | { chainId: string | number; address: string };
+
 export class LayerHopApiError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: number, public readonly requestId?: string) {
     super(message);
@@ -141,6 +160,47 @@ export class LayerHop {
       throw new LayerHopApiError(e?.code ?? "INTERNAL", e?.message ?? res.statusText, res.status, e?.requestId);
     }
     return body as T;
+  }
+
+  /** Every chain LayerHop routes (live registry): popular first, then alphabetical. */
+  async chains(): Promise<ChainInfo[]> {
+    return (await this.call<{ chains: ChainInfo[] }>("/chains")).chains;
+  }
+
+  /**
+   * Search / list tokens on a chain (LI.FI + Jupiter + curated lists, with prices). Page with
+   * `nextCursor`. A bare chain id or slug is shorthand for `{ chain }`.
+   */
+  tokens(p: TokensParams | string | number): Promise<TokensResponse> {
+    const o: TokensParams = typeof p === "object" ? p : { chain: p };
+    const q = new URLSearchParams({ chain: String(o.chain) });
+    if (o.q) q.set("q", o.q);
+    if (o.limit !== undefined) q.set("limit", String(o.limit));
+    if (o.cursor) q.set("cursor", o.cursor);
+    return this.call(`/tokens?${q}`);
+  }
+
+  /** One token by address / mint. Tokens on no list are read on-chain and have `verified: false`. */
+  async lookupToken(chain: string | number, address: string): Promise<TokenInfo> {
+    const q = new URLSearchParams({ chain: String(chain), address });
+    return (await this.call<{ token: TokenInfo }>(`/tokens/lookup?${q}`)).token;
+  }
+
+  /** USD prices for up to 100 tokens, keyed by the ids as given (`"chainId:address"`). Unknown ids are omitted. */
+  async prices(ids: PriceId[]): Promise<PricesResponse["prices"]> {
+    if (ids.length === 0) return {};
+    const list = ids.map((i) => (typeof i === "string" ? i : `${i.chainId}:${i.address}`));
+    return (await this.call<PricesResponse>(`/prices?${new URLSearchParams({ ids: list.join(",") })}`)).prices;
+  }
+
+  /**
+   * Non-zero balances of a wallet, highest USD value first. Without `chains`: popular EVM chains for an
+   * EVM address, Solana for a Solana address. Chains that fail are listed in `errors`.
+   */
+  balances(address: string, chains?: (string | number)[]): Promise<BalancesResponse> {
+    const q = new URLSearchParams({ address });
+    if (chains?.length) q.set("chains", chains.join(","));
+    return this.call(`/balances?${q}`);
   }
 
   /** Ask every liquidity provider; `best` is the highest output for the user. */

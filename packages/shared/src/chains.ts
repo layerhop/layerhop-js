@@ -1,4 +1,6 @@
-import type { ChainId, Vm } from "./types.js";
+import type { ChainInfo } from "./assets.js";
+import { CHAIN_DATA } from "./chains.data.js";
+import type { ChainId, ProviderId, Vm } from "./types.js";
 
 export interface Chain {
   id: ChainId;
@@ -8,22 +10,28 @@ export interface Chain {
   nativeSymbol: string;
   nativeDecimals: number;
   explorerTx: string; // `${explorerTx}${hash}`
+  explorerAddress?: string; // `${explorerAddress}${address}`
+  logoURI?: string;
+  /** Providers that route from or to this chain (snapshot; the API serves the live list). */
+  providers?: ProviderId[];
+  popular?: boolean;
 }
 
 /** LayerHop internal id for Solana (EVM chains use their real chain id). */
 export const SOLANA_CHAIN_ID = 7565164;
 
-export const CHAINS: readonly Chain[] = [
-  { id: 1, slug: "ethereum", name: "Ethereum", vm: "evm", nativeSymbol: "ETH", nativeDecimals: 18, explorerTx: "https://etherscan.io/tx/" },
-  { id: 42161, slug: "arbitrum", name: "Arbitrum", vm: "evm", nativeSymbol: "ETH", nativeDecimals: 18, explorerTx: "https://arbiscan.io/tx/" },
-  { id: 8453, slug: "base", name: "Base", vm: "evm", nativeSymbol: "ETH", nativeDecimals: 18, explorerTx: "https://basescan.org/tx/" },
-  { id: 10, slug: "optimism", name: "Optimism", vm: "evm", nativeSymbol: "ETH", nativeDecimals: 18, explorerTx: "https://optimistic.etherscan.io/tx/" },
-  { id: 56, slug: "bsc", name: "BNB Chain", vm: "evm", nativeSymbol: "BNB", nativeDecimals: 18, explorerTx: "https://bscscan.com/tx/" },
-  { id: 137, slug: "polygon", name: "Polygon", vm: "evm", nativeSymbol: "POL", nativeDecimals: 18, explorerTx: "https://polygonscan.com/tx/" },
-  { id: SOLANA_CHAIN_ID, slug: "solana", name: "Solana", vm: "svm", nativeSymbol: "SOL", nativeDecimals: 9, explorerTx: "https://solscan.io/tx/" },
-] as const;
+/**
+ * Static chain registry: every chain at least one of our providers listed when it was last
+ * generated (`pnpm --filter @layerhop/api gen:chains`, see docs/ASSETS_SPEC.md). The API
+ * refreshes this live every 6 h; this list is the offline fallback. The original seven chains
+ * come first, in their historical order.
+ */
+export const CHAINS: readonly ChainInfo[] = CHAIN_DATA;
 
-export function getChain(idOrSlug: ChainId | string): Chain | undefined {
+/** Chain ids shown first in pickers (docs/ASSETS_SPEC.md). */
+export const POPULAR_CHAIN_IDS: readonly ChainId[] = [1, 8453, 42161, SOLANA_CHAIN_ID, 56, 10, 137, 43114, 80094, 999, 146];
+
+export function getChain(idOrSlug: ChainId | string): ChainInfo | undefined {
   return CHAINS.find((c) => c.id === Number(idOrSlug) || c.slug === String(idOrSlug).toLowerCase());
 }
 

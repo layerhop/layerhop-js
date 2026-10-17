@@ -8,3 +8,4 @@ export * from "./http.js";
 export * from "./preview.js";
 export * from "./rpc.js";
 export * from "./webhooks.js";
+export * from "./assets.js";

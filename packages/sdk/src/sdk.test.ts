@@ -96,3 +96,45 @@ describe("sdk", () => {
       .rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
   });
 });
+
+describe("sdk assets", () => {
+  const capture = (body: unknown) => {
+    const urls: URL[] = [];
+    const lh = new LayerHop({ baseUrl: "http://x", fetch: fakeFetch((url) => (urls.push(new URL(url)), [200, body])) });
+    return { lh, urls };
+  };
+
+  it("chains() unwraps the registry", async () => {
+    const { lh, urls } = capture({ chains: [{ id: 80094, slug: "berachain" }] });
+    expect((await lh.chains())[0]!.slug).toBe("berachain");
+    expect(urls[0]!.pathname).toBe("/v1/chains");
+  });
+
+  it("tokens() sends chain, q, limit, cursor (a bare chain is shorthand)", async () => {
+    const { lh, urls } = capture({ tokens: [{ symbol: "HONEY" }], nextCursor: "50" });
+    const r = await lh.tokens({ chain: "berachain", q: "HONEY", limit: 50, cursor: "0x" });
+    expect(r.nextCursor).toBe("50");
+    expect(Object.fromEntries(urls[0]!.searchParams)).toEqual({ chain: "berachain", q: "HONEY", limit: "50", cursor: "0x" });
+    await lh.tokens(8453);
+    expect(Object.fromEntries(urls[1]!.searchParams)).toEqual({ chain: "8453" });
+  });
+
+  it("lookupToken() and prices() build the right queries", async () => {
+    const { lh, urls } = capture({ token: { symbol: "WETH" }, prices: { "8453:0xa": 1 } });
+    expect((await lh.lookupToken("base", "0xa")).symbol).toBe("WETH");
+    expect(urls[0]!.pathname).toBe("/v1/tokens/lookup");
+    expect(urls[0]!.searchParams.get("address")).toBe("0xa");
+    expect(await lh.prices(["8453:0xa", { chainId: 7565164, address: "So1" }])).toEqual({ "8453:0xa": 1 });
+    expect(urls[1]!.searchParams.get("ids")).toBe("8453:0xa,7565164:So1");
+    expect(await lh.prices([])).toEqual({});
+    expect(urls).toHaveLength(2);
+  });
+
+  it("balances() sends chains only when given", async () => {
+    const { lh, urls } = capture({ address: "0xabc", vm: "evm", balances: [], totalUsd: 0, errors: [] });
+    await lh.balances("0xabc");
+    expect(urls[0]!.searchParams.has("chains")).toBe(false);
+    await lh.balances("0xabc", ["base", 80094]);
+    expect(urls[1]!.searchParams.get("chains")).toBe("base,80094");
+  });
+});

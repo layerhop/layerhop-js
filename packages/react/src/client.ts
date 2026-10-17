@@ -14,7 +14,8 @@ export type Token = (typeof TOKENS)[number];
 export type LayerHopClient = Pick<LayerHop, "quote" | "buildTx" | "submit" | "status"> & {
   reportSubmitted?: (quoteId: string, txHash: string) => Promise<unknown>;
   chains?: () => Promise<readonly Chain[]>;
-  tokens?: (chain: string | number) => Promise<readonly Token[]>;
+  /** May return the list itself or a `GET /v1/tokens` page (`{ tokens }`, as `LayerHop.tokens` does). */
+  tokens?: (chain: string | number) => Promise<readonly Token[] | { tokens: readonly Token[] }>;
 };
 
 export const FINAL_STATES: readonly OrderStatus["state"][] = ["filled", "refunded", "failed"];
@@ -34,7 +35,10 @@ export async function loadChains(client: LayerHopClient): Promise<readonly Chain
 }
 
 export async function loadTokens(client: LayerHopClient, chain: string | number): Promise<readonly Token[]> {
-  if (typeof client.tokens === "function") return client.tokens(chain);
+  if (typeof client.tokens === "function") {
+    const r = await client.tokens(chain);
+    return "tokens" in r ? r.tokens : r;
+  }
   const c = getChain(chain);
   if (!c) throw new Error(`Unsupported chain: ${chain}`);
   return TOKENS.filter((t) => t.chainId === c.id);

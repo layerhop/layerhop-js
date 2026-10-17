@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyBps, getChain, minAfterSlippage, rankQuotes, SOLANA_CHAIN_ID, findToken, LayerHopError } from "./index.js";
+import { addressVm, applyBps, CHAINS, DEFAULT_RPC_URLS, getChain, minAfterSlippage, POPULAR_CHAIN_IDS, rankQuotes, rpcUrl, SOLANA_CHAIN_ID, findToken, LayerHopError } from "./index.js";
 import type { ProviderQuote } from "./index.js";
 
 const q = (provider: ProviderQuote["provider"], dstAmount: string, estimatedSeconds = 10) =>
@@ -33,5 +33,26 @@ describe("shared", () => {
     const e = new LayerHopError("NO_ROUTE", "none");
     expect(e.status).toBe(404);
     expect(e.toJSON("r1").error.docsUrl).toContain("/errors/NO_ROUTE");
+  });
+  it("static chain registry: unique ids/slugs, https logos and explorers, an RPC and a provider for every chain", () => {
+    expect(CHAINS.slice(0, 7).map((c) => c.slug)).toEqual(["ethereum", "arbitrum", "base", "optimism", "bsc", "polygon", "solana"]);
+    expect(new Set(CHAINS.map((c) => c.id)).size).toBe(CHAINS.length);
+    expect(new Set(CHAINS.map((c) => c.slug)).size).toBe(CHAINS.length);
+    for (const c of CHAINS) {
+      expect(c.slug, c.slug).toMatch(/^[a-z0-9-]+$/);
+      expect(c.logoURI, c.slug).toMatch(/^https:\/\//);
+      expect(c.explorerTx, c.slug).toMatch(/^https:\/\/.+\/tx\/$/);
+      expect(c.explorerAddress, c.slug).toMatch(/^https:\/\/.+\/(address|account)\/$/);
+      expect(c.providers.length, c.slug).toBeGreaterThan(0);
+      expect(DEFAULT_RPC_URLS[c.id], c.slug).toMatch(/^https:\/\//);
+      expect(c.popular).toBe(POPULAR_CHAIN_IDS.includes(c.id));
+    }
+    expect(getChain("berachain")).toMatchObject({ id: 80094, nativeSymbol: "BERA" });
+    expect(rpcUrl(80094, { RPC_URL_80094: "https://x" })).toBe("https://x");
+  });
+  it("detects address families", () => {
+    expect(addressVm("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045")).toBe("evm");
+    expect(addressVm("9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM")).toBe("svm");
+    expect(addressVm("0x123")).toBeUndefined();
   });
 });
