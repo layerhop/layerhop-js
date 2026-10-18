@@ -1,5 +1,7 @@
 # @layerhop/react
 
+[![npm](https://img.shields.io/npm/v/@layerhop/react?color=c3f06b&labelColor=090d15)](https://www.npmjs.com/package/@layerhop/react) [![license](https://img.shields.io/npm/l/@layerhop/react?color=7ddec8&labelColor=090d15)](https://opensource.org/license/mit) [![docs](https://img.shields.io/badge/docs-docs.layerhop.com-7ddec8?labelColor=090d15)](https://docs.layerhop.com/sdks/react)
+
 React hooks for LayerHop cross-chain and same-chain swaps, built on
 [`@layerhop/sdk`](https://www.npmjs.com/package/@layerhop/sdk) and [TanStack Query](https://tanstack.com/query) v5.
 

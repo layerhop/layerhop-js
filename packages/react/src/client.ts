@@ -28,7 +28,7 @@ export function isFinalState(state: OrderStatus["state"] | undefined): boolean {
  * Same-chain providers have nothing to track off-chain: the API always answers `unknown`.
  * Confirm those transactions on chain (your `sign` callback usually already waited for it).
  */
-export const SAME_CHAIN_PROVIDERS: readonly ProviderId[] = ["jupiter", "zerox", "kyberswap", "odos"];
+export const SAME_CHAIN_PROVIDERS: readonly ProviderId[] = ["jupiter", "zerox", "kyberswap"];
 
 export async function loadChains(client: LayerHopClient): Promise<readonly Chain[]> {
   return typeof client.chains === "function" ? client.chains() : CHAINS;

@@ -1,5 +1,7 @@
 # @layerhop/mcp
 
+[![npm](https://img.shields.io/npm/v/@layerhop/mcp?color=c3f06b&labelColor=090d15)](https://www.npmjs.com/package/@layerhop/mcp) [![license](https://img.shields.io/npm/l/@layerhop/mcp?color=7ddec8&labelColor=090d15)](https://opensource.org/license/mit) [![docs](https://img.shields.io/badge/docs-docs.layerhop.com-7ddec8?labelColor=090d15)](https://docs.layerhop.com/guides/ai-agents)
+
 [Model Context Protocol](https://modelcontextprotocol.io) server for [LayerHop](https://layerhop.com): AI agents (Claude, ChatGPT, Cursor, …) can list chains and tokens, get best-price cross-chain / same-chain swap quotes with every fee spelled out, and hand the user a prefilled swap link.
 
 **The server holds no private keys and never signs or broadcasts.** The user's own wallet signs.

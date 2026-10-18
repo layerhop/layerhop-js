@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "description": "LayerHop SDK — best-price cross-chain and same-chain swaps",
   "license": "MIT",
+  "author": "LayerHop (https://layerhop.com)",
+  "homepage": "https://docs.layerhop.com/sdk",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -43,7 +45,15 @@
     "swap",
     "cross-chain",
     "solana",
-    "evm"
+    "evm",
+    "dex-aggregator",
+    "bridge-aggregator",
+    "ethereum",
+    "base",
+    "arbitrum",
+    "typescript",
+    "defi",
+    "web3"
   ],
   "scripts": {
     "build": "tsup",
@@ -61,7 +71,6 @@
     "url": "git+https://github.com/layerhop/layerhop-js.git",
     "directory": "packages/sdk"
   },
-  "homepage": "https://docs.layerhop.com",
   "bugs": {
     "url": "https://github.com/layerhop/layerhop-js/issues"
   }

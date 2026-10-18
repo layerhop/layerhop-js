@@ -3,6 +3,8 @@
   "version": "0.2.0",
   "description": "Embed the LayerHop cross-chain swap widget in any site: React component, framework-agnostic mount() and a drop-in <script> tag",
   "license": "MIT",
+  "author": "LayerHop (https://layerhop.com)",
+  "homepage": "https://docs.layerhop.com/widget-reference",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -53,7 +55,13 @@
     "cross-chain",
     "widget",
     "embed",
-    "iframe"
+    "iframe",
+    "react",
+    "solana",
+    "evm",
+    "defi",
+    "web3",
+    "swap-widget"
   ],
   "scripts": {
     "build": "tsup",
@@ -83,7 +91,6 @@
     "url": "git+https://github.com/layerhop/layerhop-js.git",
     "directory": "packages/widget"
   },
-  "homepage": "https://docs.layerhop.com",
   "bugs": {
     "url": "https://github.com/layerhop/layerhop-js/issues"
   },

@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "description": "LayerHop MCP server: let AI agents (Claude, ChatGPT, Cursor, ...) quote and prepare cross-chain swaps. Holds no keys and never signs.",
   "license": "MIT",
+  "author": "LayerHop (https://layerhop.com)",
+  "homepage": "https://docs.layerhop.com/guides/ai-agents",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -31,7 +33,13 @@
     "ai-agents",
     "bridge",
     "swap",
-    "cross-chain"
+    "cross-chain",
+    "claude",
+    "cursor",
+    "llm",
+    "solana",
+    "evm",
+    "defi"
   ],
   "scripts": {
     "build": "tsup",
@@ -58,7 +66,6 @@
     "url": "git+https://github.com/layerhop/layerhop-js.git",
     "directory": "packages/mcp"
   },
-  "homepage": "https://docs.layerhop.com",
   "bugs": {
     "url": "https://github.com/layerhop/layerhop-js/issues"
   },

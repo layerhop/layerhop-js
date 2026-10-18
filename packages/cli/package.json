@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "description": "LayerHop command line: quotes, order status, deep links, project scaffolding and a local mock devnet",
   "license": "MIT",
+  "author": "LayerHop (https://layerhop.com)",
+  "homepage": "https://docs.layerhop.com/cli",
   "type": "module",
   "bin": {
     "layerhop": "./dist/index.js"
@@ -21,7 +23,12 @@
     "cli",
     "bridge",
     "swap",
-    "cross-chain"
+    "cross-chain",
+    "solana",
+    "evm",
+    "defi",
+    "web3",
+    "terminal"
   ],
   "scripts": {
     "build": "tsup",
@@ -41,7 +48,6 @@
     "url": "git+https://github.com/layerhop/layerhop-js.git",
     "directory": "packages/cli"
   },
-  "homepage": "https://docs.layerhop.com",
   "bugs": {
     "url": "https://github.com/layerhop/layerhop-js/issues"
   },

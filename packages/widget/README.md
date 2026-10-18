@@ -1,8 +1,10 @@
 # @layerhop/widget
 
+[![npm](https://img.shields.io/npm/v/@layerhop/widget?color=c3f06b&labelColor=090d15)](https://www.npmjs.com/package/@layerhop/widget) [![license](https://img.shields.io/npm/l/@layerhop/widget?color=7ddec8&labelColor=090d15)](https://opensource.org/license/mit) [![docs](https://img.shields.io/badge/docs-docs.layerhop.com-7ddec8?labelColor=090d15)](https://docs.layerhop.com/widget-reference)
+
 Embed the LayerHop cross-chain swap card in any site. The widget is an `<iframe>` of
 `https://layerhop.com/embed`, configured through URL params. It reports back to your page through
-`postMessage` events. Both the params and the events follow [`docs/URL_CONTRACT.md`](../../docs/URL_CONTRACT.md).
+`postMessage` events. Both the params and the events follow the [widget reference](https://docs.layerhop.com/widget-reference).
 
 Design it visually first at [layerhop.com/developers/widget](https://layerhop.com/developers/widget):
 the builder previews the real widget and generates the code for each option below.
@@ -15,8 +17,10 @@ There are three ways to use it:
 
 ## Install
 
+> The npm package is publishing soon. Until then, use it from the LayerHop monorepo (`packages/widget`) or embed the iframe directly: `https://layerhop.com/embed`.
+
 ```bash
-npm install @layerhop/widget
+npm install @layerhop/widget   # once published
 # React is an optional peer dependency (>=18), needed only for @layerhop/widget/react
 ```
 
@@ -79,6 +83,7 @@ buildEmbedUrl({ srcChain: "base", lockSrc: true }); // https://layerhop.com/embe
 
 ```html
 <div data-layerhop-widget data-src-chain="base" data-dst-chain="solana" data-theme="dark"></div>
+<!-- once @layerhop/widget is published to npm -->
 <script src="https://unpkg.com/@layerhop/widget@0.2.0/dist/embed.js"></script>
 <script>
   document.querySelector("[data-layerhop-widget]")
@@ -115,7 +120,7 @@ buildEmbedUrl({ srcChain: "base", lockSrc: true }); // https://layerhop.com/embe
 ## Options
 
 Every option maps to one embed URL param of the same name, except `borderColor` (the `border`
-param with a hex value) and `headerTitle` (the `title` param). See [`docs/URL_CONTRACT.md`](../../docs/URL_CONTRACT.md).
+param with a hex value) and `headerTitle` (the `title` param). See the [widget reference](https://docs.layerhop.com/widget-reference).
 
 **Swap**
 
