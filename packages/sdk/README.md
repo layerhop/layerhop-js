@@ -1,6 +1,6 @@
 # @layerhop/sdk
 
-[![npm](https://img.shields.io/npm/v/@layerhop/sdk?color=c3f06b&labelColor=090d15)](https://www.npmjs.com/package/@layerhop/sdk) [![license](https://img.shields.io/npm/l/@layerhop/sdk?color=7ddec8&labelColor=090d15)](https://opensource.org/license/mit) [![docs](https://img.shields.io/badge/docs-docs.layerhop.com-7ddec8?labelColor=090d15)](https://docs.layerhop.com/sdk)
+[![npm](https://img.shields.io/npm/v/@layerhop/sdk?color=c3f06b&labelColor=090d15&cacheSeconds=3600)](https://www.npmjs.com/package/@layerhop/sdk) [![license](https://img.shields.io/npm/l/@layerhop/sdk?color=7ddec8&labelColor=090d15)](https://opensource.org/license/mit) [![docs](https://img.shields.io/badge/docs-docs.layerhop.com-7ddec8?labelColor=090d15)](https://docs.layerhop.com/sdk)
 
 Typed TypeScript client for the [LayerHop API](https://docs.layerhop.com): best-price cross-chain and
 same-chain swaps across EVM chains and Solana through one non-custodial API.

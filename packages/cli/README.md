@@ -1,6 +1,6 @@
 # @layerhop/cli
 
-[![npm](https://img.shields.io/npm/v/@layerhop/cli?color=c3f06b&labelColor=090d15)](https://www.npmjs.com/package/@layerhop/cli) [![license](https://img.shields.io/npm/l/@layerhop/cli?color=7ddec8&labelColor=090d15)](https://opensource.org/license/mit) [![docs](https://img.shields.io/badge/docs-docs.layerhop.com-7ddec8?labelColor=090d15)](https://docs.layerhop.com/cli)
+[![npm](https://img.shields.io/npm/v/@layerhop/cli?color=c3f06b&labelColor=090d15&cacheSeconds=3600)](https://www.npmjs.com/package/@layerhop/cli) [![license](https://img.shields.io/npm/l/@layerhop/cli?color=7ddec8&labelColor=090d15)](https://opensource.org/license/mit) [![docs](https://img.shields.io/badge/docs-docs.layerhop.com-7ddec8?labelColor=090d15)](https://docs.layerhop.com/cli)
 
 LayerHop from your terminal. Quote swaps, track orders, print deep links, scaffold a project and run
 a local mock API.

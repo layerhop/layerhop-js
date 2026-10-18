@@ -1,6 +1,6 @@
 # @layerhop/widget
 
-[![npm](https://img.shields.io/npm/v/@layerhop/widget?color=c3f06b&labelColor=090d15)](https://www.npmjs.com/package/@layerhop/widget) [![license](https://img.shields.io/npm/l/@layerhop/widget?color=7ddec8&labelColor=090d15)](https://opensource.org/license/mit) [![docs](https://img.shields.io/badge/docs-docs.layerhop.com-7ddec8?labelColor=090d15)](https://docs.layerhop.com/widget-reference)
+[![npm](https://img.shields.io/npm/v/@layerhop/widget?color=c3f06b&labelColor=090d15&cacheSeconds=3600)](https://www.npmjs.com/package/@layerhop/widget) [![license](https://img.shields.io/npm/l/@layerhop/widget?color=7ddec8&labelColor=090d15)](https://opensource.org/license/mit) [![docs](https://img.shields.io/badge/docs-docs.layerhop.com-7ddec8?labelColor=090d15)](https://docs.layerhop.com/widget-reference)
 
 Embed the LayerHop cross-chain swap card in any site. The widget is an `<iframe>` of
 `https://layerhop.com/embed`, configured through URL params. It reports back to your page through
