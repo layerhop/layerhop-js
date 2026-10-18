@@ -11,3 +11,5 @@ export * from "./webhooks.js";
 export * from "./assets.js";
 export * from "./sandbox.js";
 export * from "./checkout.js";
+export * from "./emails.js";
+export * from "./monitor.js";

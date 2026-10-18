@@ -68,6 +68,31 @@ try {
 | `listOrders(params)` | `GET /v1/orders` | Orders from or to an address, newest first. |
 | `status(provider, id)` | `GET /v1/orders/{provider}/{id}` | Order status. |
 | `watch(provider, id, opts?)` | polls `status` | Async generator yielding each state change until final. |
+| `serviceStatus()` | `GET /v1/status` | Platform status (status.layerhop.com): components, 90-day uptime, incidents. |
+| `checkout.create / get / list / expire / quote / stream` | `/v1/checkout/sessions` | Checkout sessions ("pay with any token"). |
+| `checkout.products.*` | `/v1/checkout/products` | Fixed-price products for payment buttons and `/buy/{id}` links. |
+| `checkout.refunds.create(sessionId, params?)` / `.list(sessionId)` | `/v1/checkout/sessions/{id}/refunds` | Refund a paid session from your own wallet (build, sign, report). |
+| `invoices.create / get / list / update / send / void` | `/v1/invoices` | Invoices emailed to a customer and paid through checkout (API key). |
+| `invoices.publicView(id)` / `invoices.pay(id)` | `/v1/invoices/{id}/public`, `/pay` | The customer's side (public). |
+
+### Invoices and refunds
+
+```ts
+const lh = new LayerHop({ apiKey: process.env.LAYERHOP_API_KEY });
+
+// Bill a customer: emailed from billing@layerhop.com, paid at layerhop.com/invoice/{id}.
+const invoice = await lh.invoices.create({
+  customerEmail: "ap@client.example",
+  lineItems: [{ description: "Design work", quantity: 2, unitAmount: "500000000" }], // 2 × 500 USDC
+  settleChain: "base", settleToken: "USDC", recipient: "0xYourPayoutAddress",
+  send: true,
+});
+
+// Refund a paid session from your wallet (non-custodial): build, sign, report.
+const { refund, quote } = await lh.checkout.refunds.create("cs_...", { amount: "10000000", reason: "Partial refund" });
+const tx = await lh.buildTx(quote.quoteId);            // sign and broadcast from quote.from
+await lh.reportSubmitted(quote.quoteId, "0xTxHash");   // the refund completes when the order fills
+```
 
 Options for `new LayerHop(options)`: `baseUrl` (default `https://api.layerhop.com`), `apiKey`,
 `channel`, `integrator`, `integratorFeeBps`, `fetch`.

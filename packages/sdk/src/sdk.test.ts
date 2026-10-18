@@ -132,6 +132,77 @@ describe("sdk", () => {
     ]);
   });
 
+  it("invoices: create, get, list, update, send, void, publicView and pay hit the invoice routes", async () => {
+    const seen: string[] = [];
+    const lh = new LayerHop({ baseUrl: "http://x", apiKey: "k", fetch: fakeFetch((url, init) => {
+      seen.push(`${init?.method ?? "GET"} ${url} ${init?.body ?? ""}`);
+      if (url.endsWith("/pay")) return [201, { sessionId: "cs_1", url: "https://layerhop.com/pay/cs_1" }];
+      return [200, { id: "inv_1", object: "invoice", status: "open", number: "INV-0001", invoices: [], nextCursor: null }];
+    }) });
+    const inv = await lh.invoices.create({
+      lineItems: [{ description: "Design work", quantity: 2, unitAmount: "500000000" }],
+      settleChain: "base", settleToken: "USDC", recipient: "0x2", customerEmail: "ap@client.example", send: true,
+    });
+    expect(inv.number).toBe("INV-0001");
+    await lh.invoices.get("inv_1");
+    await lh.invoices.list({ status: "open", limit: 10 });
+    await lh.invoices.list();
+    await lh.invoices.update("inv_1", { memo: null, dueAt: "2026-11-01" });
+    await lh.invoices.send("inv_1");
+    await lh.invoices.void("inv/1");
+    await lh.invoices.publicView("inv_1");
+    const pay = await lh.invoices.pay("inv_1");
+    expect(pay).toEqual({ sessionId: "cs_1", url: "https://layerhop.com/pay/cs_1" });
+    expect(seen).toEqual([
+      'POST http://x/v1/invoices {"lineItems":[{"description":"Design work","quantity":2,"unitAmount":"500000000"}],"settleChain":"base","settleToken":"USDC","recipient":"0x2","customerEmail":"ap@client.example","send":true}',
+      "GET http://x/v1/invoices/inv_1 ",
+      "GET http://x/v1/invoices?status=open&limit=10 ",
+      "GET http://x/v1/invoices ",
+      'PATCH http://x/v1/invoices/inv_1 {"memo":null,"dueAt":"2026-11-01"}',
+      "POST http://x/v1/invoices/inv_1/send {}",
+      "POST http://x/v1/invoices/inv%2F1/void {}",
+      "GET http://x/v1/invoices/inv_1/public ",
+      "POST http://x/v1/invoices/inv_1/pay {}",
+    ]);
+  });
+
+  it("checkout.refunds: create posts the options, list unwraps refunds; conflicts are typed", async () => {
+    const seen: string[] = [];
+    const refund = { id: "re_1", object: "refund", sessionId: "cs_1", status: "pending", amount: "1000000", quoteId: "q_r" };
+    const lh = new LayerHop({ baseUrl: "http://x", apiKey: "k", fetch: fakeFetch((url, init) => {
+      seen.push(`${init?.method ?? "GET"} ${url} ${init?.body ?? ""}`);
+      if (url.includes("cs_done")) return [409, { error: { code: "CONFLICT", message: "Nothing left to refund on this session" } }];
+      if (init?.method === "POST") return [201, { refund, quote: { quoteId: "q_r", from: "0x2" }, next: "build, sign, report" }];
+      return [200, { refunds: [refund] }];
+    }) });
+    const r = await lh.checkout.refunds.create("cs_1", { amount: "1000000", reason: "Customer request", to: "settlement" });
+    expect(r.refund.quoteId).toBe("q_r");
+    expect(r.quote.from).toBe("0x2");
+    await lh.checkout.refunds.create("cs_1");
+    expect(await lh.checkout.refunds.list("cs_1")).toEqual([refund]);
+    await expect(lh.checkout.refunds.create("cs_done")).rejects.toMatchObject({ code: "CONFLICT", status: 409 });
+    expect(seen.slice(0, 3)).toEqual([
+      'POST http://x/v1/checkout/sessions/cs_1/refunds {"amount":"1000000","reason":"Customer request","to":"settlement"}',
+      "POST http://x/v1/checkout/sessions/cs_1/refunds {}",
+      "GET http://x/v1/checkout/sessions/cs_1/refunds ",
+    ]);
+  });
+
+  it("serviceStatus() reads /v1/status; status() the provider order status", async () => {
+    const urls: string[] = [];
+    const lh = new LayerHop({ baseUrl: "http://x", fetch: fakeFetch((url) => {
+      urls.push(url);
+      if (url.endsWith("/v1/status")) return [200, { status: "operational", updatedAt: "2026-10-18T10:00:00.000Z", components: [{ id: "api", name: "API", group: "Core", status: "operational", latencyMs: 41, uptime90d: 99.98, days: [] }], incidents: [], url: "https://layerhop.com/status" }];
+      return [200, { provider: "mock", id: "1", state: "filled" }];
+    }) });
+    const s = await lh.serviceStatus();
+    expect(s.status).toBe("operational");
+    expect(s.components[0]!.uptime90d).toBe(99.98);
+    const o = await lh.status("mock", "1");
+    expect(o.state).toBe("filled");
+    expect(urls).toEqual(["http://x/v1/status", "http://x/v1/orders/mock/1"]);
+  });
+
   it("reportSubmitted posts the tx hash to /orders/{quoteId}/submitted", async () => {
     const seen: { url: string; method?: string; body?: string }[] = [];
     const lh = new LayerHop({ baseUrl: "http://x", apiKey: "k", fetch: fakeFetch((url, init) => {

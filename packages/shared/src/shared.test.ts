@@ -56,3 +56,17 @@ describe("shared", () => {
     expect(addressVm("0x123")).toBeUndefined();
   });
 });
+
+describe("emails", () => {
+  it("subjects never contain line breaks or control characters (no header injection via merchant names)", async () => {
+    const { invoiceEmail, receiptEmail, oneLine } = await import("./index.js");
+    const merchant = "Acme\r\nBcc: victim@example.com\u0000";
+    const inv = invoiceEmail({ merchant, number: "INV-1", lines: [], total: "1.00 USDC", settlement: "USDC on Base", url: "https://layerhop.com/invoice/x" });
+    const rec = receiptEmail({ merchant, total: "1.00 USDC", settlement: "USDC on Base", paidAt: "now" });
+    for (const s of [inv.subject, rec.subject]) expect(s).not.toMatch(/[\r\n\u0000]/);
+    expect(inv.subject).toMatch(/^Invoice INV-1 from Acme Bcc: victim@example.com ?: 1.00 USDC$/); // one line, harmless text
+    expect(inv.html).not.toContain("<script");
+    expect(invoiceEmail({ merchant: "<script>x</script>", number: "1", lines: [], total: "1", settlement: "s", url: "u" }).html).toContain("&lt;script&gt;");
+    expect(oneLine(" a   b ")).toBe("a b");
+  });
+});

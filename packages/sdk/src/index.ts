@@ -87,6 +87,8 @@ export interface OrderSummary {
   livemode?: boolean;
   /** The checkout session this order pays, if any. */
   checkoutSessionId?: string | null;
+  /** The checkout refund this order sends, if any. */
+  refundId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -179,6 +181,10 @@ export interface CheckoutSession {
   url: string;
   /** The product the session was started from, if any. */
   productId?: string | null;
+  /** The invoice this session pays, if any. */
+  invoiceId?: string | null;
+  /** Completed refunds so far, base units of the settlement token ("0" when none). */
+  refundedAmount?: string;
   successUrl: string | null;
   cancelUrl: string | null;
   expiresAt: string;
@@ -263,7 +269,169 @@ export interface CheckoutQuoteResponse {
 
 export type WebhookEventType =
   | "order.submitted" | "order.filled" | "order.refunded" | "order.failed"
-  | "checkout.session.processing" | "checkout.session.completed" | "checkout.session.payment_failed" | "checkout.session.expired";
+  | "checkout.session.processing" | "checkout.session.completed" | "checkout.session.payment_failed" | "checkout.session.expired"
+  | "checkout.session.refunded" | "invoice.sent" | "invoice.paid";
+
+export type InvoiceStatus = "draft" | "open" | "paid" | "void";
+
+export interface InvoiceLineItem {
+  description: string;
+  /** 1–10000. */
+  quantity: number;
+  /** Price of one unit, integer string in base units of the settlement token. */
+  unitAmount: string;
+}
+
+export interface CreateInvoiceParams {
+  /** 1–50 lines; the invoice total is the sum of quantity × unitAmount. */
+  lineItems: InvoiceLineItem[];
+  /** Settlement chain id or slug: ethereum, arbitrum, base, optimism, bsc, polygon or solana. */
+  settleChain: string | number;
+  /** "USDC" or "USDT" (or its address) on that chain. */
+  settleToken: string;
+  /** Your payout address on the settlement chain. */
+  recipient: string;
+  /** Where the invoice (and later the receipt) is emailed. */
+  customerEmail?: string | null;
+  customerName?: string | null;
+  merchantName?: string | null;
+  memo?: string | null;
+  /** ISO date (`2026-11-01`) or date-time. */
+  dueAt?: string | null;
+  /** Finalize and email the invoice right away (otherwise it stays a draft). */
+  send?: boolean;
+}
+
+/** Drafts only; every field is optional (`null` clears a nullable field). */
+export type UpdateInvoiceParams = Partial<Omit<CreateInvoiceParams, "send">>;
+
+/** The customer's view of an invoice (`publicView`, the hosted page `layerhop.com/invoice/{id}`). */
+export interface PublicInvoice {
+  id: string;
+  object: "invoice";
+  livemode: boolean;
+  /** `INV-0001`, numbered per account and mode. */
+  number: string;
+  status: InvoiceStatus;
+  merchantName: string | null;
+  customerName: string | null;
+  memo: string | null;
+  lineItems: InvoiceLineItem[];
+  /** Total, base units of the settlement token. */
+  amount: string;
+  settlement: { chainId: number; token: string; symbol: string; decimals: number };
+  dueAt: string | null;
+  paidAt: string | null;
+  /** The hosted invoice page: `https://layerhop.com/invoice/{id}`. */
+  url: string;
+  /** PDF receipt, once paid. */
+  receiptUrl: string | null;
+  createdAt: string;
+}
+
+/** An invoice as its owner sees it (API key or dashboard). */
+export interface Invoice extends PublicInvoice {
+  customerEmail: string | null;
+  recipient: string;
+  /** The checkout session paying the invoice, once the customer started paying. */
+  sessionId: string | null;
+  sentAt: string | null;
+  receiptSentAt: string | null;
+  voidedAt: string | null;
+  updatedAt: string;
+}
+
+export interface InvoiceList {
+  invoices: Invoice[];
+  nextCursor: string | null;
+}
+
+/** `POST /v1/invoices/{id}/pay`: the checkout session that pays the invoice (reused while live). */
+export interface InvoicePayResponse {
+  sessionId: string;
+  /** The hosted checkout page. */
+  url: string;
+}
+
+export type RefundStatus = "pending" | "submitted" | "completed" | "failed";
+
+export interface CreateRefundParams {
+  /** Settlement-token base units; default: everything not yet refunded. */
+  amount?: string;
+  reason?: string;
+  /** The wallet that signs and sends the refund (default: the session's payout address). */
+  from?: string;
+  /** `original` (default): the payer's chain and token. `settlement`: the settlement token on the settlement chain. */
+  to?: "original" | "settlement";
+}
+
+export interface Refund {
+  id: string;
+  object: "refund";
+  sessionId: string;
+  livemode: boolean;
+  status: RefundStatus;
+  statusDetail: string | null;
+  /** Base units of the settlement token. */
+  amount: string;
+  reason: string | null;
+  /** Build it with `buildTx(quoteId)`, sign from `from`, then `reportSubmitted(quoteId, txHash)`. */
+  quoteId: string | null;
+  to: { chainId: number; token: string; address: string };
+  txHash: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RefundCreateResponse {
+  refund: Refund;
+  quote: {
+    quoteId: string;
+    provider: ProviderId;
+    srcAmount: string;
+    dstAmount: string;
+    dstAmountMin: string;
+    estimatedSeconds: number;
+    expiresAt: number;
+    /** The wallet that must sign the refund. */
+    from: string;
+  };
+  /** What to do next (build, sign, report). */
+  next: string;
+}
+
+export type StatusComponentState = "operational" | "degraded" | "down";
+
+export interface StatusComponent {
+  id: string;
+  name: string;
+  group: string;
+  status: StatusComponentState;
+  latencyMs: number | null;
+  /** Percent over the last 90 days (null without checks). */
+  uptime90d: number | null;
+  /** 90 days, oldest first. */
+  days: { date: string; uptime: number | null }[];
+}
+
+export interface StatusIncident {
+  id: string;
+  componentId: string;
+  component: string;
+  title: string;
+  startedAt: string;
+  resolvedAt: string | null;
+}
+
+/** `GET /v1/status` (shown at status.layerhop.com). */
+export interface StatusResponse {
+  status: "operational" | "degraded" | "outage";
+  updatedAt: string;
+  components: StatusComponent[];
+  /** The last 14 days. */
+  incidents: StatusIncident[];
+  url: string;
+}
 
 /** The JSON body LayerHop POSTs to your webhook endpoints. */
 export interface WebhookEventPayload {
@@ -273,7 +441,7 @@ export interface WebhookEventPayload {
   /** Present on samples from the dashboard or `trigger`. */
   sample?: boolean;
   createdAt: string;
-  data: { order?: OrderSummary; session?: CheckoutSession; [k: string]: unknown };
+  data: { order?: OrderSummary; session?: CheckoutSession | null; refund?: Refund; invoice?: Partial<Invoice>; [k: string]: unknown };
 }
 
 /** A token for `prices()`: `"chainId:address"` or `{ chainId, address }`. */
@@ -435,6 +603,48 @@ export class LayerHop {
     /** Live session status (SSE): yields now and on every change until paid, expired or needs_review. */
     stream: (id: string, opts: { signal?: AbortSignal } = {}): AsyncGenerator<CheckoutSession> =>
       this.stream<CheckoutSession>(`/checkout/sessions/${encodeURIComponent(id)}/events`, "session", opts.signal),
+    /**
+     * Refunds of paid sessions (API key). Non-custodial: `create` returns a quote that you build with
+     * `buildTx`, sign from `quote.from` (your wallet) and report with `reportSubmitted`.
+     */
+    refunds: {
+      create: (sessionId: string, p: CreateRefundParams = {}): Promise<RefundCreateResponse> =>
+        this.call(`/checkout/sessions/${encodeURIComponent(sessionId)}/refunds`, { method: "POST", body: JSON.stringify(p) }),
+      list: async (sessionId: string): Promise<Refund[]> =>
+        (await this.call<{ refunds: Refund[] }>(`/checkout/sessions/${encodeURIComponent(sessionId)}/refunds`)).refunds,
+    },
+  };
+
+  /**
+   * Invoices: line items billed to a customer by email and paid through checkout. `create`, `get`,
+   * `list`, `update`, `send` and `void` need an API key; `publicView` and `pay` are public (the
+   * customer's side, also behind `layerhop.com/invoice/{id}`).
+   */
+  readonly invoices = {
+    create: (p: CreateInvoiceParams): Promise<Invoice> =>
+      this.call("/invoices", { method: "POST", body: JSON.stringify(p) }),
+    get: (id: string): Promise<Invoice> => this.call(`/invoices/${encodeURIComponent(id)}`),
+    list: (p: { status?: InvoiceStatus; cursor?: string; limit?: number } = {}): Promise<InvoiceList> => {
+      const q = new URLSearchParams();
+      if (p.status) q.set("status", p.status);
+      if (p.cursor) q.set("cursor", p.cursor);
+      if (p.limit !== undefined) q.set("limit", String(p.limit));
+      return this.call(`/invoices${q.size ? `?${q}` : ""}`);
+    },
+    /** Drafts only. */
+    update: (id: string, p: UpdateInvoiceParams): Promise<Invoice> =>
+      this.call(`/invoices/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(p) }),
+    /** Finalize a draft (draft → open) and email it; on an open invoice, re-sends the email. */
+    send: (id: string): Promise<Invoice> =>
+      this.call(`/invoices/${encodeURIComponent(id)}/send`, { method: "POST", body: "{}" }),
+    /** Cancel a draft or open invoice (its open checkout session expires). */
+    void: (id: string): Promise<Invoice> =>
+      this.call(`/invoices/${encodeURIComponent(id)}/void`, { method: "POST", body: "{}" }),
+    /** Public: the customer's view of a sent invoice. */
+    publicView: (id: string): Promise<PublicInvoice> => this.call(`/invoices/${encodeURIComponent(id)}/public`),
+    /** Public: start (or reuse) the checkout session that pays the invoice; send the customer to `url`. */
+    pay: (id: string): Promise<InvoicePayResponse> =>
+      this.call(`/invoices/${encodeURIComponent(id)}/pay`, { method: "POST", body: "{}" }),
   };
 
   /**
@@ -490,8 +700,14 @@ export class LayerHop {
     }
   }
 
+  /** A provider order's status. */
   status(provider: ProviderId, id: string): Promise<OrderStatus> {
     return this.call(`/orders/${provider}/${encodeURIComponent(id)}`);
+  }
+
+  /** Platform status (`GET /v1/status`, shown at status.layerhop.com). Public. */
+  serviceStatus(): Promise<StatusResponse> {
+    return this.call("/status");
   }
 
   /** Poll until the order is final (filled/refunded/failed), yielding each change. */
