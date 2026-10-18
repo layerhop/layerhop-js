@@ -2,7 +2,7 @@ name: Release
 # Publishes every public package to npm when a version tag is pushed. Never runs on branches.
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "@layerhop/*@*"]
 permissions:
   contents: read
 jobs:

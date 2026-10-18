@@ -1,7 +1,8 @@
 {
   "name": "@layerhop/mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "LayerHop MCP server: let AI agents (Claude, ChatGPT, Cursor, ...) quote and prepare cross-chain swaps. Holds no keys and never signs.",
+  "mcpName": "com.layerhop/mcp",
   "license": "MIT",
   "author": "LayerHop (https://layerhop.com)",
   "homepage": "https://docs.layerhop.com/guides/ai-agents",

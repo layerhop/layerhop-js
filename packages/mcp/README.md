@@ -6,6 +6,8 @@
 
 **The server holds no private keys and never signs or broadcasts.** The user's own wallet signs.
 
+Listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=com.layerhop) as `com.layerhop/mcp`.
+
 ```bash
 # stdio (Claude Desktop, Claude Code, Cursor, …)
 npx -y @layerhop/mcp

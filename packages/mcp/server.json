@@ -1,0 +1,44 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.layerhop/mcp",
+  "title": "LayerHop",
+  "description": "Best-price cross-chain swap quotes across 70 chains (EVM + Solana). Holds no keys, never signs.",
+  "websiteUrl": "https://docs.layerhop.com/guides/ai-agents",
+  "repository": {
+    "url": "https://github.com/layerhop/layerhop-js",
+    "source": "github",
+    "subfolder": "packages/mcp"
+  },
+  "version": "0.1.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@layerhop/mcp",
+      "version": "0.1.1",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "LAYERHOP_API_KEY",
+          "description": "Optional LayerHop API key from dashboard.layerhop.com, for higher rate limits",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "LAYERHOP_INTEGRATOR",
+          "description": "Optional partner ID, so swaps made through your agent earn your partner fee",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        }
+      ]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.layerhop.com/mcp"
+    }
+  ]
+}
