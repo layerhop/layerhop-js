@@ -73,7 +73,7 @@ describe("parse", () => {
     expect(t.text()).toMatch(/Usage: layerhop/);
     const v = io();
     expect(await run(["-v"], v.io)).toBe(0);
-    expect(v.text()).toBe("0.1.0");
+    expect(v.text()).toBe("0.2.0");
     expect(await run([], io().io)).toBe(1);
     expect(await run(["bogus"], io().io)).toBe(2);
   });
@@ -285,5 +285,54 @@ describe("devnet", () => {
     expect(await run(["devnet"], t.io)).toBe(1);
     expect(spawn).not.toHaveBeenCalled();
     expect(t.text()).toMatch(/LAYERHOP_ENABLE_MOCK=1 PROVIDERS=mock/);
+  });
+});
+
+describe("listen + trigger", () => {
+  const TEST_KEY = `lh_test_${"a".repeat(32)}`;
+  const ev = { id: "evt_1", type: "order.filled", livemode: false, sample: true, createdAt: "2026-10-18T10:00:00.000Z", data: { order: { status: "filled" } } };
+
+  it("forwards streamed events to --forward-to, signed with the session secret", async () => {
+    const { verifyWebhookSignature } = await import("@layerhop/shared");
+    const posts: { url: string; headers: Record<string, string>; body: string }[] = [];
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/v1/webhooks/stream")) {
+        expect((init?.headers as Record<string, string>)["x-api-key"]).toBe(TEST_KEY);
+        const frames = `event: ready\ndata: {}\n\nevent: event\ndata: ${JSON.stringify({ ...ev, type: "order.submitted", id: "evt_0" })}\n\nevent: event\ndata: ${JSON.stringify(ev)}\n\n`;
+        return new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(frames)); c.close(); } }));
+      }
+      posts.push({ url: u, headers: init?.headers as Record<string, string>, body: String(init?.body) });
+      return new Response("ok", { status: 200 });
+    }) as unknown as typeof globalThis.fetch;
+    const t = io(undefined, { fetch, env: { LAYERHOP_API_KEY: TEST_KEY, LAYERHOP_WEBHOOK_SECRET: "whsec_dev" } });
+    const code = await run(["listen", "--forward-to", "http://localhost:3000/hooks", "--events", "order.filled", "--max-events", "1"], t.io);
+    expect(code).toBe(0);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.url).toBe("http://localhost:3000/hooks");
+    expect(posts[0]!.headers["LayerHop-Event"]).toBe("order.filled");
+    expect(await verifyWebhookSignature("whsec_dev", posts[0]!.headers["LayerHop-Signature"], posts[0]!.body)).toBe(true);
+    expect(JSON.parse(posts[0]!.body)).toEqual(ev);
+    expect(t.text()).toMatch(/--> order\.filled \[evt_1\]\s+<-- 200/);
+  });
+
+  it("validates its arguments", async () => {
+    expect(await run(["listen", "--forward-to", "http://x"], io().io)).toBe(2); // no key
+    const keyed = io(undefined, { env: { LAYERHOP_API_KEY: TEST_KEY } });
+    expect(await run(["listen"], keyed.io)).toBe(2);
+    expect(await run(["listen", "--forward-to", "nope"], keyed.io)).toBe(2);
+    expect(await run(["listen", "--forward-to", "http://x", "--events", "order.bogus"], keyed.io)).toBe(2);
+  });
+
+  it("trigger posts the type with a test key and refuses live keys", async () => {
+    const t = io((url, init) => {
+      expect(url).toMatch(/\/v1\/webhooks\/trigger$/);
+      expect(JSON.parse(String(init?.body))).toEqual({ type: "checkout.session.completed" });
+      return [202, { eventId: "evt_9", deliveries: 2, payload: {} }];
+    }, { env: { LAYERHOP_API_KEY: TEST_KEY } });
+    expect(await run(["trigger", "checkout.session.completed"], t.io)).toBe(0);
+    expect(t.text()).toMatch(/Triggered checkout\.session\.completed \[evt_9\]: queued for 2 test endpoints/);
+    expect(await run(["trigger", "order.filled"], io(undefined, { env: { LAYERHOP_API_KEY: `lh_live_${"b".repeat(32)}` } }).io)).toBe(2);
+    expect(await run(["trigger", "nope"], io(undefined, { env: { LAYERHOP_API_KEY: TEST_KEY } }).io)).toBe(2);
   });
 });

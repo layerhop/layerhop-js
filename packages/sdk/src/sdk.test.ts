@@ -83,6 +83,35 @@ describe("sdk", () => {
     expect(seen.every((x) => x.key === "lh_test_k")).toBe(true);
   });
 
+  it("streamOrder parses SSE frames split across chunks and stops at the end of the stream", async () => {
+    const frames = [
+      "event: ready\ndata: {\"retryMs\":3000}\n\n: ping\n\nevent: order\ndata: {\"quoteId\":\"q_1\",\"status\":\"built\"}\n\neve",
+      "nt: order\r\ndata: {\"quoteId\":\"q_1\",\"status\":\"filled\"}\r\n\r\n",
+    ];
+    let url = "";
+    let accept = "";
+    const lh = new LayerHop({ baseUrl: "http://x", apiKey: "k", fetch: (async (u: string, init?: RequestInit) => {
+      url = u;
+      accept = (init?.headers as Record<string, string>).accept!;
+      const enc = new TextEncoder();
+      return new Response(new ReadableStream({ start(c) { for (const f of frames) c.enqueue(enc.encode(f)); c.close(); } }), { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch });
+    const seen: string[] = [];
+    for await (const o of lh.streamOrder("q_1")) seen.push(o.status);
+    expect(seen).toEqual(["built", "filled"]);
+    expect(url).toBe("http://x/v1/orders/q_1/events");
+    expect(accept).toBe("text/event-stream");
+  });
+
+  it("stream errors surface as LayerHopApiError; webhooks.trigger posts the type", async () => {
+    const lh = new LayerHop({ baseUrl: "http://x", apiKey: "lh_live_k", fetch: fakeFetch((url, init) =>
+      url.endsWith("/webhooks/trigger")
+        ? [403, { error: { code: "FORBIDDEN", message: "test keys only", requestId: "r1" } }]
+        : [404, { error: { code: "NOT_FOUND", message: "Checkout session not found" } }]) });
+    await expect(lh.checkout.stream("cs_x").next()).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
+    await expect(lh.webhooks.trigger("order.filled")).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+  });
+
   it("reportSubmitted posts the tx hash to /orders/{quoteId}/submitted", async () => {
     const seen: { url: string; method?: string; body?: string }[] = [];
     const lh = new LayerHop({ baseUrl: "http://x", apiKey: "k", fetch: fakeFetch((url, init) => {

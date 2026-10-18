@@ -10,6 +10,7 @@ import {
   useChains,
   useLayerHop,
   useOrderStatus,
+  useOrderStream,
   useQuote,
   useSwap,
   useTokens,
@@ -238,5 +239,44 @@ describe("useSwap", () => {
     await act(async () => { release("0xh"); await done; });
     expect(result.current.phase).toBe("idle");
     expect(client.status).not.toHaveBeenCalled();
+  });
+});
+
+describe("useOrderStream", () => {
+  const order = (status: string) => ({ quoteId: "q_1", status }) as never;
+  it("follows the stream until the order is final, and reconnects after a network error", async () => {
+    let calls = 0;
+    const client = mockClient({
+      streamOrder: (async function* () {
+        calls++;
+        if (calls === 1) {
+          yield order("submitted");
+          throw new Error("network down");
+        }
+        yield order("pending");
+        yield order("filled");
+      }) as never,
+    });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { result } = renderHook(() => useOrderStream("q_1"), { wrapper: wrap(client) });
+    await waitFor(() => expect(result.current.error?.message).toBe("network down"));
+    expect(result.current.order).toMatchObject({ status: "submitted" });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    await waitFor(() => expect(result.current.isFinal).toBe(true));
+    expect(result.current).toMatchObject({ order: { status: "filled" }, error: null, connected: false });
+    expect(calls).toBe(2);
+    vi.useRealTimers();
+  });
+
+  it("stops on client errors and explains a missing streamOrder", async () => {
+    const notFound = mockClient({
+      streamOrder: (async function* () {
+        throw new LayerHopApiError("ORDER_NOT_FOUND", "No order", 404);
+      }) as never,
+    });
+    const { result } = renderHook(() => useOrderStream("q_x"), { wrapper: wrap(notFound) });
+    await waitFor(() => expect(result.current.error).toBeInstanceOf(LayerHopApiError));
+    const old = renderHook(() => useOrderStream("q_1"), { wrapper: wrap(mockClient()) });
+    await waitFor(() => expect(old.result.current.error?.message).toMatch(/0\.3/));
   });
 });

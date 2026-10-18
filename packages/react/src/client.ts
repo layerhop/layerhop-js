@@ -13,6 +13,8 @@ export type Token = (typeof TOKENS)[number];
  */
 export type LayerHopClient = Pick<LayerHop, "quote" | "buildTx" | "submit" | "status"> & {
   reportSubmitted?: (quoteId: string, txHash: string) => Promise<unknown>;
+  /** Live order status over SSE (`@layerhop/sdk` 0.3+); `useOrderStream` needs it. */
+  streamOrder?: LayerHop["streamOrder"];
   chains?: () => Promise<readonly Chain[]>;
   /** May return the list itself or a `GET /v1/tokens` page (`{ tokens }`, as `LayerHop.tokens` does). */
   tokens?: (chain: string | number) => Promise<readonly Token[] | { tokens: readonly Token[] }>;

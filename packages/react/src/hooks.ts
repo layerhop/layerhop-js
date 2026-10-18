@@ -5,8 +5,10 @@ import {
   type ProviderId,
   type QuoteParams,
   type QuoteResponse,
+  type OrderSummary,
 } from "@layerhop/sdk";
 import { useMutation, useQuery, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { isFinalState, loadChains, loadTokens, type Chain, type Token } from "./client.js";
 import { useLayerHop } from "./provider.js";
 
@@ -114,4 +116,61 @@ export function useOrderStatus(
     refetchInterval: (query) => (isFinalState(query.state.data?.state) ? false : intervalMs),
   });
   return Object.assign(q, { isFinal: isFinalState(q.data?.state) });
+}
+
+const ORDER_FINAL = new Set(["filled", "refunded", "failed", "expired"]);
+
+export interface OrderStreamState {
+  /** The latest order (null until the first event). */
+  order: OrderSummary | null;
+  /** The last error; the hook keeps reconnecting with backoff until the order is final. */
+  error: Error | null;
+  /** True while a stream is open. */
+  connected: boolean;
+  /** filled, refunded, failed or expired: the stream is closed for good. */
+  isFinal: boolean;
+}
+
+/**
+ * Live order status over Server-Sent Events (`GET /v1/orders/{quoteId}/events`): updates the moment
+ * the order changes, reconnects after network errors (1 s, 2 s, 4 s … up to 30 s) and stops once the
+ * order is final. Idle while `quoteId` is empty. Needs `@layerhop/sdk` 0.3 or later.
+ */
+export function useOrderStream(quoteId: string | null | undefined): OrderStreamState {
+  const client = useLayerHop();
+  const [state, setState] = useState<OrderStreamState>({ order: null, error: null, connected: false, isFinal: false });
+  useEffect(() => {
+    if (!quoteId) return;
+    if (typeof client.streamOrder !== "function") {
+      setState((s) => ({ ...s, error: new Error("useOrderStream needs @layerhop/sdk 0.3+ (client.streamOrder)") }));
+      return;
+    }
+    const ctrl = new AbortController();
+    let attempt = 0;
+    let final = false;
+    void (async () => {
+      while (!ctrl.signal.aborted && !final) {
+        try {
+          setState((s) => ({ ...s, connected: true }));
+          for await (const order of client.streamOrder!(quoteId, { signal: ctrl.signal })) {
+            attempt = 0;
+            final = ORDER_FINAL.has(order.status);
+            setState({ order, error: null, connected: !final, isFinal: final });
+          }
+          if (final || ctrl.signal.aborted) break;
+        } catch (e) {
+          if (ctrl.signal.aborted) break;
+          if (e instanceof LayerHopApiError && e.status < 500 && e.status !== 429) {
+            setState((s) => ({ ...s, error: e, connected: false }));
+            break;
+          }
+          setState((s) => ({ ...s, error: e as Error, connected: false }));
+        }
+        await new Promise((r) => setTimeout(r, Math.min(30_000, 1000 * 2 ** attempt++)));
+      }
+      setState((s) => ({ ...s, connected: false }));
+    })();
+    return () => ctrl.abort();
+  }, [client, quoteId]);
+  return state;
 }

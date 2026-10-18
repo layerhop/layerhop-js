@@ -3,12 +3,13 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { CHAINS, LayerHop, LayerHopApiError, TOKENS, findToken, getChain, type OrderStatus, type ProviderId, type QuoteResponse } from "@layerhop/sdk";
+import { CHAINS, LayerHop, LayerHopApiError, TOKENS, findToken, getChain, type OrderStatus, type ProviderId, type QuoteResponse, type WebhookEventPayload, type WebhookEventType } from "@layerhop/sdk";
+import { signWebhookPayload } from "@layerhop/shared";
 import { formatSeconds, formatUnits, json, parseUnits, table } from "./format.js";
 import { buildSwapLink } from "./link.js";
 import { TEMPLATE_NAMES, packageNameFrom, renderTemplate, type TemplateName } from "./templates.js";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 export const DEFAULT_API_URL = "https://api.layerhop.com";
 
 export interface Io {
@@ -35,6 +36,9 @@ Commands:
   status <provider> <txhash> [--watch]        Order status; --watch polls until filled/refunded/failed
   link <amount> <token> <chain> <toToken> <toChain>
                                               Print a layerhop.com/swap deep link (--embed for /embed)
+  listen --forward-to <url>                   Forward your account's webhook events to a local URL, signed
+                                              (uses the API key's mode: test or live)
+  trigger <event-type>                        Send a sample test-mode event, e.g. order.filled (test key)
   init [node|next] <dir>                      Scaffold a minimal project using @layerhop/sdk
   devnet                                      Run the local API with the mock provider (monorepo only)
 
@@ -50,6 +54,8 @@ Link options:   --recipient --slippage-bps <n> --ref <ref> --integrator <id>
                 --embed --theme dark|light --accent <hex> --radius <px> --lock-src --lock-dst --hide-history
 Status options: --watch --interval <seconds>
 Init options:   --force (write into a non-empty directory)
+Listen options: --forward-to <url> --events <type,type> --secret <whsec_…> (env LAYERHOP_WEBHOOK_SECRET;
+                default: a new secret per session, printed at start)
 
 LayerHop never holds keys: the CLI quotes and tracks; your wallet signs.`;
 
@@ -75,6 +81,10 @@ const OPTIONS = {
   "lock-dst": { type: "boolean" },
   "hide-history": { type: "boolean" },
   force: { type: "boolean" },
+  "forward-to": { type: "string" },
+  events: { type: "string" },
+  secret: { type: "string" },
+  "max-events": { type: "string" },
 } as const;
 
 export type ParsedArgs = ReturnType<typeof parse>;
@@ -338,6 +348,97 @@ function defaultSpawn(cmd: string, args: string[], opts: { cwd: string; env: Rec
   });
 }
 
+const EVENT_TYPES: readonly WebhookEventType[] = [
+  "order.submitted", "order.filled", "order.refunded", "order.failed",
+  "checkout.session.processing", "checkout.session.completed", "checkout.session.payment_failed", "checkout.session.expired",
+];
+
+function requireKey(opts: ParsedArgs["opts"], io: Io, what: string): string {
+  const key = opts["api-key"] ?? io.env.LAYERHOP_API_KEY;
+  if (!key) throw new UsageError(`${what} needs an API key: --api-key or LAYERHOP_API_KEY (create one at https://dashboard.layerhop.com/keys)`);
+  return key;
+}
+
+function randomSecret(): string {
+  const abc = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  return `whsec_${Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => abc[b % 62]).join("")}`;
+}
+
+/**
+ * `layerhop listen`: stream the account's webhook events and POST each one to --forward-to, signed
+ * exactly like a real delivery (LayerHop-Signature with the session secret). Reconnects with backoff;
+ * runs until interrupted (or --max-events, for scripts and tests).
+ */
+async function cmdListen(p: ParsedArgs, io: Io): Promise<number> {
+  const key = requireKey(p.opts, io, "listen");
+  const target = p.opts["forward-to"];
+  if (!target) throw new UsageError("Usage: layerhop listen --forward-to http://localhost:3000/webhooks");
+  try {
+    new URL(target);
+  } catch {
+    throw new UsageError("--forward-to must be a URL, e.g. http://localhost:3000/webhooks");
+  }
+  const only = p.opts.events?.split(",").map((s) => s.trim()).filter(Boolean);
+  const bad = only?.filter((t) => !(EVENT_TYPES as readonly string[]).includes(t));
+  if (bad?.length) throw new UsageError(`Unknown event type ${bad.join(", ")}. One of: ${EVENT_TYPES.join(", ")}`);
+  const max = int(p.opts["max-events"], "max-events");
+  const secret = p.opts.secret ?? io.env.LAYERHOP_WEBHOOK_SECRET ?? randomSecret();
+  const mode = key.startsWith("lh_test_") ? "test" : "live";
+  const sleep = io.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  io.err(`Ready. Forwarding ${mode}-mode events${only ? ` (${only.join(", ")})` : ""} to ${target}`);
+  io.err(`Webhook signing secret for this session: ${secret}${p.opts.secret || io.env.LAYERHOP_WEBHOOK_SECRET ? " (yours)" : " (set LAYERHOP_WEBHOOK_SECRET to keep one)"}`);
+  if (mode === "test") io.err("Tip: run `layerhop trigger order.filled` in another terminal to send a sample event.");
+  const lh = client(p.opts, io);
+  let forwarded = 0;
+  let attempt = 0;
+  const forward = async (ev: WebhookEventPayload) => {
+    const body = JSON.stringify(ev);
+    const started = Date.now();
+    let status = "error";
+    try {
+      const res = await io.fetch(target, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json", "user-agent": `layerhop-cli/${VERSION}`,
+          "LayerHop-Event": ev.type, "LayerHop-Delivery": `cli_${ev.id}`, "LayerHop-Signature": await signWebhookPayload(secret, body),
+        },
+        body,
+      });
+      status = String(res.status);
+    } catch (e) {
+      status = `error: ${(e as Error).message}`;
+    }
+    const line = { event: ev.type, id: ev.id, status, ms: Date.now() - started };
+    if (p.opts.json) io.out(json(line));
+    else io.out(`${new Date().toISOString().slice(11, 19)}  --> ${ev.type} [${ev.id}]  <-- ${status} (${line.ms} ms)`);
+  };
+  for (;;) {
+    try {
+      for await (const ev of lh.webhooks.stream()) {
+        attempt = 0;
+        if (only && !only.includes(ev.type)) continue;
+        await forward(ev);
+        if (max !== undefined && ++forwarded >= max) return 0;
+      }
+    } catch (e) {
+      if (e instanceof LayerHopApiError && e.status < 500 && e.status !== 429) throw e;
+      io.err(`stream interrupted (${(e as Error).message}); reconnecting…`);
+    }
+    await sleep(Math.min(30_000, 1000 * 2 ** attempt++));
+  }
+}
+
+async function cmdTrigger(p: ParsedArgs, io: Io): Promise<number> {
+  const [type] = need(p.args, 1, `trigger <event-type>  (${EVENT_TYPES.join(", ")})`) as [string];
+  if (!(EVENT_TYPES as readonly string[]).includes(type)) throw new UsageError(`Unknown event type "${type}". One of: ${EVENT_TYPES.join(", ")}`);
+  const key = requireKey(p.opts, io, "trigger");
+  if (!key.startsWith("lh_test_")) throw new UsageError("trigger only works with a test key (lh_test_…), so samples never reach live endpoints");
+  const r = await client(p.opts, io).webhooks.trigger(type as WebhookEventType);
+  if (p.opts.json) io.out(json(r));
+  else io.out(`Triggered ${type} [${r.eventId}]: queued for ${r.deliveries} test endpoint${r.deliveries === 1 ? "" : "s"} and any running \`layerhop listen\`.`);
+  return 0;
+}
+
 /** Runs the CLI. Returns the process exit code; never calls process.exit. */
 export async function run(argv: string[], io: Io): Promise<number> {
   try {
@@ -358,6 +459,8 @@ export async function run(argv: string[], io: Io): Promise<number> {
       case "link": return cmdLink(p, io);
       case "init": return await cmdInit(p, io);
       case "devnet": return await cmdDevnet(p, io);
+      case "listen": return await cmdListen(p, io);
+      case "trigger": return await cmdTrigger(p, io);
       default: throw new UsageError(`Unknown command "${p.command}". Run layerhop --help.`);
     }
   } catch (e) {

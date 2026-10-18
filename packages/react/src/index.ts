@@ -5,10 +5,12 @@ export {
   useQuote,
   useBuildTx,
   useOrderStatus,
+  useOrderStream,
   autoRefetchMs,
   layerhopKeys,
   type UseQuoteOptions,
   type UseOrderStatusOptions,
+  type OrderStreamState,
 } from "./hooks.js";
 export {
   useSwap,

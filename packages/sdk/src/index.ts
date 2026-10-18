@@ -219,6 +219,21 @@ export interface CheckoutQuoteResponse {
   errors: { provider: string; code: string; message: string }[];
 }
 
+export type WebhookEventType =
+  | "order.submitted" | "order.filled" | "order.refunded" | "order.failed"
+  | "checkout.session.processing" | "checkout.session.completed" | "checkout.session.payment_failed" | "checkout.session.expired";
+
+/** The JSON body LayerHop POSTs to your webhook endpoints. */
+export interface WebhookEventPayload {
+  id: string;
+  type: WebhookEventType | "webhook.test";
+  livemode: boolean;
+  /** Present on samples from the dashboard or `trigger`. */
+  sample?: boolean;
+  createdAt: string;
+  data: { order?: OrderSummary; session?: CheckoutSession; [k: string]: unknown };
+}
+
 /** A token for `prices()`: `"chainId:address"` or `{ chainId, address }`. */
 export type PriceId = string | { chainId: string | number; address: string };
 
@@ -355,7 +370,63 @@ export class LayerHop {
       this.call(`/checkout/sessions/${encodeURIComponent(id)}/expire`, { method: "POST", body: "{}" }),
     quote: (id: string, p: CheckoutQuoteParams): Promise<CheckoutQuoteResponse> =>
       this.call(`/checkout/sessions/${encodeURIComponent(id)}/quote`, { method: "POST", body: JSON.stringify(p) }),
+    /** Live session status (SSE): yields now and on every change until paid, expired or needs_review. */
+    stream: (id: string, opts: { signal?: AbortSignal } = {}): AsyncGenerator<CheckoutSession> =>
+      this.stream<CheckoutSession>(`/checkout/sessions/${encodeURIComponent(id)}/events`, "session", opts.signal),
   };
+
+  /**
+   * Live order status (Server-Sent Events): yields the order now and on every change, and ends when
+   * it is final (filled, refunded, failed or expired). Pass an AbortSignal to stop early.
+   */
+  streamOrder(quoteId: string, opts: { signal?: AbortSignal } = {}): AsyncGenerator<OrderSummary> {
+    return this.stream<OrderSummary>(`/orders/${encodeURIComponent(quoteId)}/events`, "order", opts.signal);
+  }
+
+  /** Webhook developer tools with an API key (the CLI's `listen` and `trigger`). */
+  readonly webhooks = {
+    /** Your account's webhook events (the key's mode) as they are created, with the exact payloads. */
+    stream: (opts: { signal?: AbortSignal } = {}): AsyncGenerator<WebhookEventPayload> =>
+      this.stream<WebhookEventPayload>("/webhooks/stream", "event", opts.signal),
+    /** A sample event in test mode (test keys only): sent to your test endpoints and open streams. */
+    trigger: (type: WebhookEventType): Promise<{ eventId: string; deliveries: number; payload: WebhookEventPayload }> =>
+      this.call("/webhooks/trigger", { method: "POST", body: JSON.stringify({ type }) }),
+  };
+
+  /** Read a Server-Sent Events stream, yielding the JSON data of `event` frames. */
+  private async *stream<T>(path: string, event: string, signal?: AbortSignal): AsyncGenerator<T> {
+    const headers: Record<string, string> = { accept: "text/event-stream" };
+    if (this.opts.apiKey) headers["x-api-key"] = this.opts.apiKey;
+    const res = await this.fetchFn(`${this.baseUrl}/v1${path}`, { headers, signal });
+    if (!res.ok || !res.body) {
+      const body = (await res.json().catch(() => ({}))) as { error?: { code: string; message: string; requestId?: string } };
+      throw new LayerHopApiError(body.error?.code ?? "INTERNAL", body.error?.message ?? res.statusText, res.status, body.error?.requestId);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+        let i: number;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          let name = "message";
+          const data: string[] = [];
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) name = line.slice(6).trim();
+            else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+          }
+          if (name === event && data.length) yield JSON.parse(data.join("\n")) as T;
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
+  }
 
   status(provider: ProviderId, id: string): Promise<OrderStatus> {
     return this.call(`/orders/${provider}/${encodeURIComponent(id)}`);
