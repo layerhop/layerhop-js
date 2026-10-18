@@ -9,3 +9,5 @@ export * from "./preview.js";
 export * from "./rpc.js";
 export * from "./webhooks.js";
 export * from "./assets.js";
+export * from "./sandbox.js";
+export * from "./checkout.js";

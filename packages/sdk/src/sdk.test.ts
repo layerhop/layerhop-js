@@ -58,6 +58,31 @@ describe("sdk", () => {
     expect(seen).toEqual(["pending", "filled"]);
   });
 
+  it("checkout: create, get, list, expire and quote hit the session routes", async () => {
+    const seen: { url: string; method?: string; body?: string; key?: string }[] = [];
+    const lh = new LayerHop({ baseUrl: "http://x", apiKey: "lh_test_k", fetch: fakeFetch((url, init) => {
+      seen.push({ url, method: init?.method, body: init?.body ? String(init.body) : undefined, key: (init?.headers as Record<string, string>)["x-api-key"] });
+      return [200, { id: "cs_test_1", sessions: [], best: { quoteId: "q_test_1" } }];
+    }) });
+    await lh.checkout.create({ amount: "49000000", settleChain: "base", settleToken: "USDC", recipient: "0x2" });
+    await lh.checkout.get("cs_test_1");
+    await lh.checkout.list({ status: "paid", limit: 5 });
+    await lh.checkout.list();
+    await lh.checkout.expire("cs_test_1");
+    await lh.checkout.quote("cs_test_1", { srcChain: "arbitrum", srcToken: "ETH", sender: "0x1" });
+    expect(seen.map((x) => `${x.method ?? "GET"} ${x.url}`)).toEqual([
+      "POST http://x/v1/checkout/sessions",
+      "GET http://x/v1/checkout/sessions/cs_test_1",
+      "GET http://x/v1/checkout/sessions?status=paid&limit=5",
+      "GET http://x/v1/checkout/sessions",
+      "POST http://x/v1/checkout/sessions/cs_test_1/expire",
+      "POST http://x/v1/checkout/sessions/cs_test_1/quote",
+    ]);
+    expect(JSON.parse(seen[0]!.body!)).toEqual({ amount: "49000000", settleChain: "base", settleToken: "USDC", recipient: "0x2" });
+    expect(JSON.parse(seen[5]!.body!)).toEqual({ srcChain: "arbitrum", srcToken: "ETH", sender: "0x1" });
+    expect(seen.every((x) => x.key === "lh_test_k")).toBe(true);
+  });
+
   it("reportSubmitted posts the tx hash to /orders/{quoteId}/submitted", async () => {
     const seen: { url: string; method?: string; body?: string }[] = [];
     const lh = new LayerHop({ baseUrl: "http://x", apiKey: "k", fetch: fakeFetch((url, init) => {

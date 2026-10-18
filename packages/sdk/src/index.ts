@@ -6,7 +6,10 @@ export type {
   BuiltTx, EvmTx, SvmTx, OrderStatus, ProviderId, FeeChannel, FeeBreakdown,
   ChainInfo, TokenInfo, Balance, TokensResponse, PricesResponse, BalancesResponse,
 } from "@layerhop/shared";
-export { CHAINS, TOKENS, getChain, findToken, SOLANA_CHAIN_ID, EVM_NATIVE, SOL_NATIVE } from "@layerhop/shared";
+export {
+  CHAINS, TOKENS, getChain, findToken, SOLANA_CHAIN_ID, EVM_NATIVE, SOL_NATIVE,
+  SETTLEMENT_TOKENS, findSettlementToken, SANDBOX_MAGIC_AMOUNTS,
+} from "@layerhop/shared";
 
 export interface LayerHopOptions {
   /** Defaults to https://api.layerhop.com */
@@ -54,6 +57,8 @@ export interface QuoteResponse {
   best: Quote;
   quotes: Quote[];
   errors: { provider: string; code: string; message: string }[];
+  /** false when the request used an `lh_test_` key (sandbox quotes). */
+  livemode?: boolean;
 }
 
 /** Lifecycle of an order recorded by the API (docs/PLATFORM_SPEC.md "Orders"). */
@@ -78,6 +83,10 @@ export interface OrderSummary {
   partnerFeeBps: number;
   srcTxHash: string | null;
   dstTxHash: string | null;
+  /** false for test-mode orders. */
+  livemode?: boolean;
+  /** The checkout session this order pays, if any. */
+  checkoutSessionId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -129,6 +138,85 @@ export interface TokensParams {
   limit?: number;
   /** `nextCursor` from the previous page. */
   cursor?: string;
+}
+
+export type CheckoutStatus = "open" | "processing" | "paid" | "expired" | "needs_review";
+
+export interface CreateCheckoutParams {
+  /** Amount due, integer string in base units of the settlement token (49 USDC = "49000000"). */
+  amount: string;
+  /** Settlement chain id or slug: ethereum, arbitrum, base, optimism, bsc, polygon or solana. */
+  settleChain: string | number;
+  /** "USDC" or "USDT" (or its address) on that chain. */
+  settleToken: string;
+  /** Your payout address on the settlement chain. */
+  recipient: string;
+  merchantName?: string;
+  /** Shown to the payer. */
+  description?: string;
+  /** Your own order id; never shown to the payer. */
+  reference?: string;
+  /** Up to 20 string values; never shown to the payer. */
+  metadata?: Record<string, string>;
+  successUrl?: string;
+  cancelUrl?: string;
+  /** 5–10080, default 60. */
+  expiresInMinutes?: number;
+}
+
+export interface CheckoutSession {
+  id: string;
+  object: "checkout.session";
+  livemode: boolean;
+  status: CheckoutStatus;
+  statusDetail: string | null;
+  amount: string;
+  settlement: { chainId: number; token: string; symbol: string; decimals: number };
+  recipient: string;
+  merchantName: string | null;
+  description: string | null;
+  /** The hosted checkout page: send the payer here. */
+  url: string;
+  successUrl: string | null;
+  cancelUrl: string | null;
+  expiresAt: string;
+  payment: {
+    quoteId: string;
+    payer: string | null;
+    srcChainId: number | null;
+    srcToken: string | null;
+    srcAmount: string | null;
+    srcTxHash: string | null;
+    dstTxHash: string | null;
+    paidAt: string | null;
+  } | null;
+  /** Only with the owning account's API key. */
+  reference?: string | null;
+  metadata?: Record<string, string> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CheckoutQuoteParams {
+  srcChain: string | number;
+  srcToken: string;
+  /** The payer's address on `srcChain`. */
+  sender: string;
+  slippageBps?: number;
+}
+
+export interface CheckoutQuote extends Quote {
+  /** What the payer sends, base units of the chosen token. */
+  srcAmount: string;
+}
+
+export interface CheckoutQuoteResponse {
+  sessionId: string;
+  livemode: boolean;
+  amountDue: string;
+  best: CheckoutQuote;
+  quotes: CheckoutQuote[];
+  errors: { provider: string; code: string; message: string }[];
 }
 
 /** A token for `prices()`: `"chainId:address"` or `{ chainId, address }`. */
@@ -247,6 +335,27 @@ export class LayerHop {
     if (p.limit !== undefined) q.set("limit", String(p.limit));
     return this.call(`/orders?${q}`);
   }
+
+  /**
+   * Checkout ("pay with any token"). `create`, `list` and `expire` need an API key; `get` and
+   * `quote` are public (the payer's side). Pay a quote with `buildTx` + `reportSubmitted` as usual.
+   */
+  readonly checkout = {
+    create: (p: CreateCheckoutParams): Promise<CheckoutSession> =>
+      this.call("/checkout/sessions", { method: "POST", body: JSON.stringify(p) }),
+    get: (id: string): Promise<CheckoutSession> => this.call(`/checkout/sessions/${encodeURIComponent(id)}`),
+    list: (p: { status?: CheckoutStatus; cursor?: string; limit?: number } = {}): Promise<{ sessions: CheckoutSession[]; nextCursor: string | null }> => {
+      const q = new URLSearchParams();
+      if (p.status) q.set("status", p.status);
+      if (p.cursor) q.set("cursor", p.cursor);
+      if (p.limit !== undefined) q.set("limit", String(p.limit));
+      return this.call(`/checkout/sessions${q.size ? `?${q}` : ""}`);
+    },
+    expire: (id: string): Promise<CheckoutSession> =>
+      this.call(`/checkout/sessions/${encodeURIComponent(id)}/expire`, { method: "POST", body: "{}" }),
+    quote: (id: string, p: CheckoutQuoteParams): Promise<CheckoutQuoteResponse> =>
+      this.call(`/checkout/sessions/${encodeURIComponent(id)}/quote`, { method: "POST", body: JSON.stringify(p) }),
+  };
 
   status(provider: ProviderId, id: string): Promise<OrderStatus> {
     return this.call(`/orders/${provider}/${encodeURIComponent(id)}`);

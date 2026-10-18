@@ -1,7 +1,7 @@
 export type ChainId = number;
 export type Vm = "evm" | "svm";
 
-export type ProviderId = "jupiter" | "relay" | "debridge" | "mayan" | "zerox" | "kyberswap" | "odos" | "lifi" | "mock";
+export type ProviderId = "jupiter" | "relay" | "debridge" | "mayan" | "zerox" | "kyberswap" | "odos" | "lifi" | "mock" | "sandbox" | "direct";
 
 /** Where the trade came from — decides our fee (see docs/BOOTSTRAP_PLAN.md). */
 export type FeeChannel = "web" | "widget" | "bot" | "api";
@@ -39,6 +39,8 @@ export type EvmTx = {
   value: string; // wei, integer string
   /** ERC-20 approval the user must grant before sending `to/data`. */
   approval?: { token: string; spender: string; amount: string };
+  /** Test mode only: a placeholder that moves no funds. Never broadcast it. */
+  sandbox?: true;
 };
 
 export type SvmTx = {
@@ -51,6 +53,8 @@ export type SvmTx = {
    * never land via plain RPC).
    */
   submitViaApi?: boolean;
+  /** Test mode only: a placeholder that moves no funds (and cannot land on chain). Never broadcast it. */
+  sandbox?: true;
 };
 
 export type BuiltTx = EvmTx | SvmTx;

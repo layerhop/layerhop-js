@@ -35,6 +35,21 @@ const { best } = await lh.quote({
 const tx = await lh.buildTx(best.quoteId); // unsigned; sign with your wallet
 ```
 
+**Checkout: pay with any token** (`@layerhop/sdk` 0.2+)
+
+```ts
+const session = await lh.checkout.create({
+  amount: "49000000", settleChain: "base", settleToken: "USDC", // 49 USDC on Base
+  recipient: "0xYourPayoutAddress", successUrl: "https://shop.example.com/thanks",
+});
+// Send the customer to session.url; fulfil on the checkout.session.completed webhook.
+```
+
+**Test mode**: use an `lh_test_…` key from the dashboard and every call is served by the sandbox
+(live-priced quotes, placeholder transactions, orders fill in ~10 s). See
+<https://docs.layerhop.com/guides/test-mode>. Try every endpoint in the
+[API playground](https://docs.layerhop.com/playground).
+
 **React** (`npm install @layerhop/react @layerhop/sdk @tanstack/react-query`)
 
 ```tsx
