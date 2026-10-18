@@ -1,7 +1,9 @@
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, type CSSProperties } from "react";
+import { mountCheckout, openCheckout, type CheckoutHandle, type CheckoutOptions, type MountCheckoutOptions } from "./checkout";
 import { WIDGET_OPTION_KEYS, buildEmbedUrl, mount, type MountOptions, type WidgetHandle, type WidgetOptions } from "./core";
 
 export type * from "./core";
+export type * from "./checkout";
 
 export interface LayerHopWidgetProps extends MountOptions {
   /** Class name for the wrapping <div>. */
@@ -89,3 +91,92 @@ export function LayerHopWidget(props: LayerHopWidgetProps) {
   return <div ref={containerRef} className={className} style={style} data-layerhop-widget-root="" />;
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Checkout
+// ---------------------------------------------------------------------------------------------
+
+export interface LayerHopCheckoutProps extends MountCheckoutOptions {
+  /** Class name for the wrapping <div>. */
+  className?: string;
+  /** Inline style for the wrapping <div>. */
+  style?: CSSProperties;
+}
+
+/**
+ * The checkout inline (an auto-resizing iframe). Pass `sessionId` (created on your server) or
+ * `productId` (a session is started in the browser on mount). Callbacks can change freely; changing
+ * the session, product, reference, metadata, URLs or sizing props starts over with a new iframe.
+ * Note: with `productId`, every mount starts a new session (React StrictMode mounts twice in dev).
+ */
+export function LayerHopCheckout(props: LayerHopCheckoutProps) {
+  const { className, style, sessionId, productId, reference, metadata, baseUrl, apiUrl, title, autoResize, height, maxWidth } = props;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const propsRef = useRef(props);
+  propsRef.current = props;
+  const metadataKey = metadata ? JSON.stringify(metadata) : "";
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handle = mountCheckout(el, {
+      sessionId,
+      productId,
+      reference,
+      metadata: metadataKey ? (JSON.parse(metadataKey) as Record<string, string>) : undefined,
+      baseUrl,
+      apiUrl,
+      title,
+      autoResize,
+      height,
+      maxWidth,
+      onReady: () => propsRef.current.onReady?.(),
+      onPaid: (s) => propsRef.current.onPaid?.(s),
+      onCancel: () => propsRef.current.onCancel?.(),
+      onClose: () => propsRef.current.onClose?.(),
+      onStatus: (s) => propsRef.current.onStatus?.(s),
+      onError: (e) => (propsRef.current.onError ? propsRef.current.onError(e) : console.error("[LayerHop] checkout:", e)),
+    });
+    return () => handle.close();
+  }, [sessionId, productId, reference, metadataKey, baseUrl, apiUrl, title, autoResize, height, maxWidth]);
+
+  return <div ref={containerRef} className={className} style={style} data-layerhop-checkout-root="" />;
+}
+
+/**
+ * Open the checkout modal from your own button: `const checkout = useLayerHopCheckout({ onPaid });
+ * checkout.open({ productId: "prod_…" })`. Options passed to `open` override the hook's defaults.
+ * The modal closes when the component unmounts.
+ */
+export function useLayerHopCheckout(defaults: CheckoutOptions = {}): {
+  open: (opts?: CheckoutOptions) => CheckoutHandle;
+  close: () => void;
+} {
+  const defaultsRef = useRef(defaults);
+  defaultsRef.current = defaults;
+  const handleRef = useRef<CheckoutHandle | null>(null);
+
+  const close = useCallback(() => {
+    handleRef.current?.close();
+    handleRef.current = null;
+  }, []);
+
+  const open = useCallback((opts: CheckoutOptions = {}) => {
+    const merged: CheckoutOptions = { ...defaultsRef.current, ...opts };
+    // Only one of sessionId / productId: the one given to open() wins over the hook's default.
+    if (opts.sessionId) delete merged.productId;
+    if (opts.productId) delete merged.sessionId;
+    const handle = openCheckout({
+      ...merged,
+      onClose: () => {
+        if (handleRef.current === handle) handleRef.current = null;
+        merged.onClose?.();
+      },
+    });
+    handleRef.current = handle;
+    return handle;
+  }, []);
+
+  useEffect(() => close, [close]);
+  return { open, close };
+}

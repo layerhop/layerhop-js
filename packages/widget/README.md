@@ -84,7 +84,7 @@ buildEmbedUrl({ srcChain: "base", lockSrc: true }); // https://layerhop.com/embe
 ```html
 <div data-layerhop-widget data-src-chain="base" data-dst-chain="solana" data-theme="dark"></div>
 <!-- once @layerhop/widget is published to npm -->
-<script src="https://unpkg.com/@layerhop/widget@0.2.0/dist/embed.js"></script>
+<script src="https://unpkg.com/@layerhop/widget@0.3.0/dist/embed.js"></script>
 <script>
   document.querySelector("[data-layerhop-widget]")
     .addEventListener("layerhop:quote", (e) => console.log(e.detail));
@@ -282,12 +282,76 @@ All payload types are exported: `ReadyEvent`, `QuoteEvent`, `SubmittedEvent`, `S
 and `WidgetMessage`. Payloads never contain secrets. The new events need embed protocol 1.1
 (`ready.version` ≥ `1.1.0`).
 
+## Checkout: accept payments on your site
+
+The same package embeds [LayerHop Checkout](https://docs.layerhop.com/guides/embedded-checkout): the
+payer picks any token on any chain, you're paid in USDC or USDT, and they never leave your page. The
+checkout is an iframe of `https://layerhop.com/pay/{sessionId}?embed=1|modal`.
+
+**Payment button, no code** ([guide](https://docs.layerhop.com/guides/payment-buttons)):
+
+```html
+<script src="https://layerhop.com/checkout.js" async></script>
+
+<button data-layerhop-product="prod_…">Pay with crypto</button>
+```
+
+- `data-layerhop-product="prod_…"` starts a new session for the product on click; `data-layerhop-session="cs_…"` opens an existing one.
+- `data-layerhop-reference="order_1042"`, `data-layerhop-metadata='{"plan":"pro"}'` or `data-layerhop-metadata-plan="pro"` (products only).
+- `data-layerhop-mode="inline"` renders the checkout inside the element instead of opening a modal.
+- An empty `<button>` gets the label "Pay with crypto". On a link (`<a href="https://layerhop.com/buy/prod_…">`), the href is the no-JS fallback.
+- Events bubble from the element: `layerhop:ready`, `layerhop:status`, `layerhop:paid`, `layerhop:cancel`, `layerhop:close`, `layerhop:error` (`event.detail` has `sessionId`, plus `status`, `session` or `error`).
+- `data-layerhop-base-url` / `data-layerhop-api-url` on the `<script>` tag (or `window.LayerHopCheckoutConfig = { baseUrl, apiUrl }`) point it elsewhere, e.g. a local LayerHop.
+
+**JavaScript** (`window.LayerHopCheckout` from checkout.js, or `import { openCheckout } from "@layerhop/widget"`):
+
+```js
+const checkout = LayerHopCheckout.open({
+  sessionId: "cs_…",                 // created on your server; or productId: "prod_…"
+  onPaid: (session) => showThanks(session.id),
+  onClose: () => console.log("closed"),
+});
+// checkout.close(); await checkout.sessionId;
+
+LayerHopCheckout.mount("#pay", { productId: "prod_…", reference: "order_1042" }); // inline, auto-resizing
+const session = await LayerHopCheckout.createProductSession("prod_…", { reference: "order_1042" });
+```
+
+**React**
+
+```tsx
+import { LayerHopCheckout, useLayerHopCheckout } from "@layerhop/widget/react";
+
+<LayerHopCheckout productId="prod_…" reference="order_1042" onPaid={(s) => router.push(`/thanks?session=${s.id}`)} />;
+
+const checkout = useLayerHopCheckout({ onPaid });
+<button onClick={() => checkout.open({ sessionId })}>Pay with crypto</button>;
+```
+
+Options: `sessionId` or `productId`, `reference`, `metadata`, `baseUrl` (default `https://layerhop.com`),
+`apiUrl` (default `https://api.layerhop.com`), `title`, and callbacks `onReady`, `onPaid(session)`,
+`onCancel`, `onClose` (the modal closed, for any reason), `onStatus(status)`, `onError(error)`.
+`mountCheckout` also takes `autoResize`, `height` and `maxWidth`. Both return
+`{ sessionId: Promise<string>, iframe, close() }`.
+
+The modal is an `aria-modal` dialog: focus stays inside, Escape and the backdrop close it, the page
+doesn't scroll behind it, and it's a full-height sheet on phones. After `paid` it stays open on the
+receipt; close it from `onPaid` if you prefer. Fulfil orders on the `checkout.session.completed`
+webhook, not only on `onPaid`.
+
+**Messages** (for a hand-rolled iframe): the frame posts
+`{ source: "layerhop-checkout", version: 1, type, sessionId, ... }` to its parent with types `ready`,
+`resize` (`height`), `status` (`status`), `paid` (`session`), `cancel` and `close` (modal only). Pass
+`origin=<your origin>` in the iframe URL so messages are sent to your origin only, and check
+`event.origin === "https://layerhop.com"` and `event.source === iframe.contentWindow`. The embedded
+checkout never redirects to your `successUrl`; your page decides what happens next.
+
 ## Development
 
 ```bash
 pnpm --filter @layerhop/widget typecheck
 pnpm --filter @layerhop/widget test
-pnpm --filter @layerhop/widget build    # dist/: ESM + CJS + .d.ts, and dist/embed.js (IIFE)
+pnpm --filter @layerhop/widget build    # dist/: ESM + CJS + .d.ts, dist/embed.js and dist/checkout.js (IIFE)
 ```
 
 To run the demo, start `apps/web` on `:3000` and build this package. Then serve `packages/widget`

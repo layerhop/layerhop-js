@@ -177,6 +177,8 @@ export interface CheckoutSession {
   description: string | null;
   /** The hosted checkout page: send the payer here. */
   url: string;
+  /** The product the session was started from, if any. */
+  productId?: string | null;
   successUrl: string | null;
   cancelUrl: string | null;
   expiresAt: string;
@@ -195,6 +197,46 @@ export interface CheckoutSession {
   metadata?: Record<string, string> | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CreateCheckoutProductParams {
+  name: string;
+  description?: string | null;
+  merchantName?: string | null;
+  /** Price in base units of the settlement token. */
+  amount: string;
+  settleChain: string | number;
+  settleToken: string;
+  recipient: string;
+  successUrl?: string | null;
+  cancelUrl?: string | null;
+  /** Lifetime of each session started from the product (5–10080, default 60). */
+  expiresInMinutes?: number;
+  /** https origins allowed to start sessions from a browser; empty = any. */
+  allowedOrigins?: string[];
+  active?: boolean;
+}
+
+export interface CheckoutProduct {
+  id: string;
+  object: "checkout.product";
+  livemode: boolean;
+  active: boolean;
+  name: string;
+  description: string | null;
+  merchantName: string | null;
+  amount: string;
+  settlement: { chainId: number; token: string; symbol: string; decimals: number };
+  /** `https://layerhop.com/buy/{id}` */
+  url: string;
+  /** Owner only (with the account's key): */
+  recipient?: string;
+  successUrl?: string | null;
+  cancelUrl?: string | null;
+  expiresInMinutes?: number;
+  allowedOrigins?: string[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface CheckoutQuoteParams {
@@ -370,6 +412,26 @@ export class LayerHop {
       this.call(`/checkout/sessions/${encodeURIComponent(id)}/expire`, { method: "POST", body: "{}" }),
     quote: (id: string, p: CheckoutQuoteParams): Promise<CheckoutQuoteResponse> =>
       this.call(`/checkout/sessions/${encodeURIComponent(id)}/quote`, { method: "POST", body: JSON.stringify(p) }),
+    /**
+     * Products: a fixed price for payment buttons, `/buy/{id}` links and plugins. `startSession` is
+     * public (no key needed) and can only add a reference and metadata to the product's terms.
+     */
+    products: {
+      create: (p: CreateCheckoutProductParams): Promise<CheckoutProduct> =>
+        this.call("/checkout/products", { method: "POST", body: JSON.stringify(p) }),
+      get: (id: string): Promise<CheckoutProduct> => this.call(`/checkout/products/${encodeURIComponent(id)}`),
+      list: (p: { active?: boolean; cursor?: string; limit?: number } = {}): Promise<{ products: CheckoutProduct[]; nextCursor: string | null }> => {
+        const q = new URLSearchParams();
+        if (p.active !== undefined) q.set("active", String(p.active));
+        if (p.cursor) q.set("cursor", p.cursor);
+        if (p.limit !== undefined) q.set("limit", String(p.limit));
+        return this.call(`/checkout/products${q.size ? `?${q}` : ""}`);
+      },
+      update: (id: string, p: Partial<CreateCheckoutProductParams>): Promise<CheckoutProduct> =>
+        this.call(`/checkout/products/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(p) }),
+      startSession: (id: string, p: { reference?: string; metadata?: Record<string, string> } = {}): Promise<CheckoutSession> =>
+        this.call(`/checkout/products/${encodeURIComponent(id)}/sessions`, { method: "POST", body: JSON.stringify(p) }),
+    },
     /** Live session status (SSE): yields now and on every change until paid, expired or needs_review. */
     stream: (id: string, opts: { signal?: AbortSignal } = {}): AsyncGenerator<CheckoutSession> =>
       this.stream<CheckoutSession>(`/checkout/sessions/${encodeURIComponent(id)}/events`, "session", opts.signal),

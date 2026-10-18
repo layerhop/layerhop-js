@@ -1,4 +1,7 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "tsup";
+
+const { version } = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version: string };
 
 export default defineConfig([
   // Library entries: `@layerhop/widget` (core, no React) and `@layerhop/widget/react`.
@@ -21,6 +24,19 @@ export default defineConfig([
     sourcemap: true,
     clean: false,
     target: "es2018",
+    outExtension: () => ({ js: ".js" }),
+  },
+  // Drop-in checkout script (served at https://layerhop.com/checkout.js by apps/web):
+  // window.LayerHopCheckout.{open, mount, createProductSession, autoInit, close} + payment-button auto-init.
+  {
+    entry: { checkout: "src/checkout-embed.ts" },
+    format: ["iife"],
+    globalName: "LayerHopCheckout",
+    minify: true,
+    sourcemap: true,
+    clean: false,
+    target: "es2018",
+    define: { __WIDGET_VERSION__: JSON.stringify(version) },
     outExtension: () => ({ js: ".js" }),
   },
 ]);

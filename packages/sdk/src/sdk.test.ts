@@ -112,6 +112,26 @@ describe("sdk", () => {
     await expect(lh.webhooks.trigger("order.filled")).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
   });
 
+  it("checkout.products: create, get, list, update and the public startSession", async () => {
+    const seen: string[] = [];
+    const lh = new LayerHop({ baseUrl: "http://x", apiKey: "k", fetch: fakeFetch((url, init) => {
+      seen.push(`${init?.method ?? "GET"} ${url} ${init?.body ?? ""}`);
+      return [200, { id: "prod_1", products: [] }];
+    }) });
+    await lh.checkout.products.create({ name: "Pro", amount: "49000000", settleChain: "base", settleToken: "USDC", recipient: "0x2" });
+    await lh.checkout.products.get("prod_1");
+    await lh.checkout.products.list({ active: true });
+    await lh.checkout.products.update("prod_1", { active: false });
+    await lh.checkout.products.startSession("prod_1", { reference: "o_1" });
+    expect(seen).toEqual([
+      'POST http://x/v1/checkout/products {"name":"Pro","amount":"49000000","settleChain":"base","settleToken":"USDC","recipient":"0x2"}',
+      "GET http://x/v1/checkout/products/prod_1 ",
+      "GET http://x/v1/checkout/products?active=true ",
+      'PATCH http://x/v1/checkout/products/prod_1 {"active":false}',
+      'POST http://x/v1/checkout/products/prod_1/sessions {"reference":"o_1"}',
+    ]);
+  });
+
   it("reportSubmitted posts the tx hash to /orders/{quoteId}/submitted", async () => {
     const seen: { url: string; method?: string; body?: string }[] = [];
     const lh = new LayerHop({ baseUrl: "http://x", apiKey: "k", fetch: fakeFetch((url, init) => {

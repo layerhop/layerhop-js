@@ -12,7 +12,7 @@ Docs: <https://docs.layerhop.com>
 |---|---|
 | [`@layerhop/sdk`](packages/sdk) | LayerHop SDK — best-price cross-chain and same-chain swaps |
 | [`@layerhop/react`](packages/react) | React hooks for LayerHop cross-chain swaps: quotes, transactions, order tracking and a wallet-agnostic useSwap state machine |
-| [`@layerhop/widget`](packages/widget) | Embed the LayerHop cross-chain swap widget in any site: React component, framework-agnostic mount() and a drop-in <script> tag |
+| [`@layerhop/widget`](packages/widget) | Embed the LayerHop cross-chain swap widget and checkout in any site: React components, framework-agnostic mount()/openCheckout() and drop-in <script> tags |
 | [`@layerhop/cli`](packages/cli) | LayerHop command line: quotes, order status, deep links, project scaffolding and a local mock devnet |
 | [`@layerhop/mcp`](packages/mcp) | LayerHop MCP server: let AI agents (Claude, ChatGPT, Cursor, ...) quote and prepare cross-chain swaps. Holds no keys and never signs. |
 

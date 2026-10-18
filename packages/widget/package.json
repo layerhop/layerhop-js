@@ -1,7 +1,7 @@
 {
   "name": "@layerhop/widget",
-  "version": "0.2.0",
-  "description": "Embed the LayerHop cross-chain swap widget in any site: React component, framework-agnostic mount() and a drop-in <script> tag",
+  "version": "0.3.0",
+  "description": "Embed the LayerHop cross-chain swap widget and checkout in any site: React components, framework-agnostic mount()/openCheckout() and drop-in <script> tags",
   "license": "MIT",
   "author": "LayerHop (https://layerhop.com)",
   "homepage": "https://docs.layerhop.com/widget-reference",
@@ -31,6 +31,7 @@
       }
     },
     "./embed.js": "./dist/embed.js",
+    "./checkout.js": "./dist/checkout.js",
     "./package.json": "./package.json"
   },
   "typesVersions": {
@@ -46,7 +47,8 @@
     "LICENSE"
   ],
   "sideEffects": [
-    "./dist/embed.js"
+    "./dist/embed.js",
+    "./dist/checkout.js"
   ],
   "keywords": [
     "layerhop",
@@ -61,7 +63,11 @@
     "evm",
     "defi",
     "web3",
-    "swap-widget"
+    "swap-widget",
+    "checkout",
+    "payments",
+    "crypto-payments",
+    "payment-button"
   ],
   "scripts": {
     "build": "tsup",

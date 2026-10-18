@@ -68,3 +68,47 @@ describe("<LayerHopWidget>", () => {
     expect(container.querySelectorAll("iframe")).toHaveLength(1);
   });
 });
+
+describe("<LayerHopCheckout> / useLayerHopCheckout", () => {
+  const SID = "cs_test_01jabc123";
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it("mounts the inline checkout and forwards events to the latest callbacks", async () => {
+    const { LayerHopCheckout } = await import("../src/react");
+    const first = vi.fn();
+    const second = vi.fn();
+    act(() => root.render(<LayerHopCheckout sessionId={SID} className="co" onPaid={first} />));
+    await act(flush);
+    const iframe = container.querySelector("iframe")!;
+    expect(iframe.src).toContain(`/pay/${SID}?embed=1`);
+    expect(container.querySelector(".co")).not.toBeNull();
+    act(() => root.render(<LayerHopCheckout sessionId={SID} className="co" onPaid={second} />));
+    expect(container.querySelector("iframe")).toBe(iframe);
+    post(iframe, { source: "layerhop-checkout", version: 1, type: "paid", sessionId: SID, session: { id: SID } });
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledWith({ id: SID });
+    act(() => root.unmount());
+    expect(iframe.isConnected).toBe(false);
+    root = createRoot(container);
+  });
+
+  it("opens and closes the modal from a hook, closing on unmount", async () => {
+    const { useLayerHopCheckout } = await import("../src/react");
+    let api: ReturnType<typeof useLayerHopCheckout> | undefined;
+    const onClose = vi.fn();
+    function Shop() {
+      api = useLayerHopCheckout({ onClose });
+      return null;
+    }
+    act(() => root.render(<Shop />));
+    act(() => void api!.open({ sessionId: SID }));
+    expect(document.querySelector("[data-layerhop-checkout]")).not.toBeNull();
+    act(() => api!.close());
+    expect(document.querySelector("[data-layerhop-checkout]")).toBeNull();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    act(() => void api!.open({ sessionId: SID }));
+    act(() => root.unmount());
+    expect(document.querySelector("[data-layerhop-checkout]")).toBeNull();
+    root = createRoot(container);
+  });
+});
