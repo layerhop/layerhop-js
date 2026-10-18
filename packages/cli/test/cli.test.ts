@@ -73,7 +73,7 @@ describe("parse", () => {
     expect(t.text()).toMatch(/Usage: layerhop/);
     const v = io();
     expect(await run(["-v"], v.io)).toBe(0);
-    expect(v.text()).toBe("0.2.0");
+    expect(v.text()).toBe("0.5.0");
     expect(await run([], io().io)).toBe(1);
     expect(await run(["bogus"], io().io)).toBe(2);
   });

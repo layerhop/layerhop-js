@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addressVm, applyBps, CHAINS, DEFAULT_RPC_URLS, getChain, minAfterSlippage, POPULAR_CHAIN_IDS, rankQuotes, rpcUrl, SOLANA_CHAIN_ID, findToken, LayerHopError } from "./index.js";
+import { addressVm, applyBps, CHAINS, DEFAULT_RPC_URLS, getChain, minAfterSlippage, POPULAR_CHAIN_IDS, rankQuotes, rpcUrl, SOLANA_CHAIN_ID, findToken, LayerHopError, paidWithLabel } from "./index.js";
 import type { ProviderQuote } from "./index.js";
 
 const q = (provider: ProviderQuote["provider"], dstAmount: string, estimatedSeconds = 10) =>
@@ -68,5 +68,14 @@ describe("emails", () => {
     expect(inv.html).not.toContain("<script");
     expect(invoiceEmail({ merchant: "<script>x</script>", number: "1", lines: [], total: "1", settlement: "s", url: "u" }).html).toContain("&lt;script&gt;");
     expect(oneLine(" a   b ")).toBe("a b");
+  });
+});
+
+describe("paidWithLabel", () => {
+  it("names native and known tokens with the amount, and shortens unknown addresses", () => {
+    expect(paidWithLabel({ srcChainId: 42161, srcToken: "0x0000000000000000000000000000000000000000", srcAmount: "74647160000000000" })).toBe("0.07464716 ETH on Arbitrum");
+    expect(paidWithLabel({ srcChainId: 137, srcToken: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", srcAmount: "5000000" })).toBe("5.00 USDC on Polygon");
+    expect(paidWithLabel({ srcChainId: 8453, srcToken: "0x1234567890abcdef1234567890abcdef12345678", srcAmount: "1" })).toBe("0x1234…5678 on Base");
+    expect(paidWithLabel({ srcChainId: null, srcToken: null, srcAmount: null })).toBeNull();
   });
 });

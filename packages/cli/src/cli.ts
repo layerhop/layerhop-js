@@ -9,7 +9,7 @@ import { formatSeconds, formatUnits, json, parseUnits, table } from "./format.js
 import { buildSwapLink } from "./link.js";
 import { TEMPLATE_NAMES, packageNameFrom, renderTemplate, type TemplateName } from "./templates.js";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.5.0";
 export const DEFAULT_API_URL = "https://api.layerhop.com";
 
 export interface Io {

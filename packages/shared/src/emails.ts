@@ -23,6 +23,9 @@ export interface MoneyLine {
  */
 export const oneLine = (s: string) => s.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").replace(/ {2,}/g, " ").trim();
 
+import { getChain } from "./chains.js";
+import { findToken, isNative } from "./tokens.js";
+
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /** Base units → "49.00" (at least 2 decimals, trailing zeros trimmed beyond that). */
@@ -33,6 +36,19 @@ export function formatTokenAmount(amount: string, decimals: number): string {
   let frac = (v % base).toString().padStart(decimals, "0").replace(/0+$/, "");
   if (frac.length < 2) frac = frac.padEnd(2, "0");
   return `${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${frac}`;
+}
+
+/** "0.0746 ETH on Arbitrum" for what a payer sent; unknown tokens show a shortened address. */
+export function paidWithLabel(p: { srcChainId: number | null; srcToken: string | null; srcAmount: string | null }): string | null {
+  if (!p.srcChainId) return null;
+  const chain = getChain(String(p.srcChainId));
+  const chainName = chain?.name ?? String(p.srcChainId);
+  if (!p.srcToken) return chainName;
+  const native = chain && isNative(p.srcChainId, p.srcToken) ? { symbol: chain.nativeSymbol, decimals: chain.nativeDecimals } : undefined;
+  const t = native ?? findToken(p.srcChainId, p.srcToken);
+  const symbol = t?.symbol ?? `${p.srcToken.slice(0, 6)}…${p.srcToken.slice(-4)}`;
+  const amount = t && p.srcAmount && /^\d+$/.test(p.srcAmount) ? `${formatTokenAmount(p.srcAmount, t.decimals)} ` : "";
+  return `${amount}${symbol} on ${chainName}`;
 }
 
 function shell(title: string, body: string, footer: string): string {
