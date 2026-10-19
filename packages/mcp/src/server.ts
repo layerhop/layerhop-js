@@ -7,7 +7,18 @@ import { AmountError, fromBaseUnits, toBaseUnits } from "./amounts.js";
 import { LayerHopApiError } from "@layerhop/sdk";
 import { EndpointUnavailableError, LayerHopClient } from "./client.js";
 import { configFromEnv, VERSION, type McpConfig } from "./config.js";
-import { formatBuiltTx, formatQuoteResponse, type QuoteContext, type TokenInfo } from "./format.js";
+import {
+  depositRules,
+  formatBuiltTx,
+  formatDepositAddress,
+  formatDepositEstimate,
+  formatDepositOrder,
+  formatQuoteResponse,
+  type DepositAddressLike,
+  type QuoteContext,
+  type TokenInfo,
+  type TokenLookup,
+} from "./format.js";
 import { buildSwapLink } from "./links.js";
 
 export const PROVIDERS = ["jupiter", "relay", "debridge", "mayan", "zerox", "kyberswap", "odos", "lifi", "mock"] as const satisfies readonly ProviderId[];
@@ -20,7 +31,15 @@ export const SERVER_INSTRUCTIONS = `LayerHop finds the best-priced route for cro
 
 Amounts in tool inputs are HUMAN decimal strings in the token's own units ("100" = 100 USDC, "0.05" = 0.05 ETH), never base units. Outputs show human amounts; fields named *BaseUnits are integers in the token's smallest unit.
 
-Safe workflow: list_chains / list_tokens if unsure -> get_quote -> show the user output, minimum received, every fee and the ETA -> get explicit confirmation -> prefer giving the user the swapLink (or get_swap_link) so they review and sign in their own wallet on layerhop.com. Only use build_transaction when the user has their own signer and asks for raw transaction data; never ask for or accept private keys or seed phrases.`;
+Safe workflow: list_chains / list_tokens if unsure -> get_quote -> show the user output, minimum received, every fee and the ETA -> get explicit confirmation -> prefer giving the user the swapLink (or get_swap_link) so they review and sign in their own wallet on layerhop.com. Only use build_transaction when the user has their own signer and asks for raw transaction data; never ask for or accept private keys or seed phrases.
+
+Deposit addresses (create_deposit_address and friends, API key required) let a user swap or bridge by just sending a token to an address. When you show one, always tell the user: send ONLY that token on that chain (anything else may be lost), at least $1 worth, and refunds go to refundTo, which must be their own address, never an exchange deposit address. Test-key addresses are fake: never send real funds; use simulate_deposit.`;
+
+const DEPOSIT_WARNING =
+  "Tell the user: send ONLY srcToken on srcChain to the address (other tokens or chains may be lost for good), at least $1 worth; refundTo must be the user's own address on srcChain, never an exchange (CEX) deposit address. Needs a LayerHop API key; test keys (lh_test_) give a fake sandbox address that must never receive real funds.";
+
+export const DEPOSIT_KEY_MISSING =
+  "Deposit addresses need a LayerHop API key. Local server: set LAYERHOP_API_KEY (lh_test_... for test mode, lh_live_... for live). Hosted server (mcp.layerhop.com): send the x-layerhop-api-key header (or Authorization: Bearer lh_...). Create a key at https://dashboard.layerhop.com/keys.";
 
 export interface CreateServerOptions {
   config?: Partial<McpConfig>;
@@ -466,6 +485,235 @@ export function buildServer(opts: InternalServerOptions): McpServer {
         return {
           url,
           summary: `Open ${url} to review the live quote and fees and sign with your own wallet.`,
+        };
+      }),
+  );
+
+  // ---------- deposit addresses (API key required) ----------
+  const requireKey = () => {
+    if (client.keyMode === "none") throw new UserInputError(DEPOSIT_KEY_MISSING);
+  };
+  /** Like resolveToken, but lets an unlisted (valid) address through without decimals. */
+  const resolveTokenLoose = async (chain: Chain, input: string, decimals?: number): Promise<{ address: string; symbol: string; decimals?: number }> => {
+    try {
+      return await resolveToken(chain, input, decimals);
+    } catch (e) {
+      if (e instanceof UserInputError && isValidAddress(chain.vm, input.trim())) return { address: input.trim(), symbol: input.trim() };
+      throw e;
+    }
+  };
+  const tokenLookup = async (chainIds: number[]): Promise<TokenLookup> => {
+    const ids = [...new Set(chainIds)];
+    const lists = new Map(await Promise.all(ids.map(async (id) => [id, await client.tokens(id)] as const)));
+    return (chainId, address) => {
+      const t = lists.get(chainId)?.find((x) => x.address.toLowerCase() === address.toLowerCase());
+      return t ? { symbol: t.symbol, address: t.address, decimals: t.decimals } : undefined;
+    };
+  };
+  const describeDeposit = async (da: DepositAddressLike) => {
+    const [chains, lookup] = await Promise.all([client.chains(), tokenLookup([da.chainId, da.dstChainId])]);
+    const name = chainNameById(chains);
+    return { name, lookup, view: formatDepositAddress(da, name, lookup), tellTheUser: depositRules(da, name, lookup) };
+  };
+  const depositIdSchema = z.string().regex(/^da_/, "deposit address ids start with da_").describe('Deposit address id (starts with "da_").');
+
+  server.registerTool(
+    "create_deposit_address",
+    {
+      title: "Create a deposit address",
+      description: `Create an address the user sends tokens to; every deposit is swapped/bridged and delivered as toToken on toChain to recipient. No wallet connection or signing needed. Non-custodial: the address belongs to the liquidity provider (Relay), LayerHop never holds funds. ${DEPOSIT_WARNING} ${NO_KEYS}`,
+      inputSchema: {
+        fromChain: chainSchema("Source (deposit)"),
+        fromToken: tokenSchema("The ONLY token the user may send to the address (source)"),
+        toChain: chainSchema("Destination"),
+        toToken: tokenSchema("Token to deliver (destination)"),
+        recipient: z.string().min(1).describe("Address that receives toToken on toChain."),
+        refundTo: z
+          .string()
+          .min(1)
+          .describe("The user's OWN address on fromChain for refunds. NEVER an exchange (CEX) deposit address: refunds never go back to an exchange."),
+        reusable: z.boolean().optional().describe("true (default): reusable for this route with any amount. false: one-time address for exactly `amount`."),
+        amount: amountSchema
+          .optional()
+          .describe('HUMAN units of fromToken ("25" = 25 USDC). Required when reusable is false (the exact amount to send); otherwise only sizes the estimate. Minimum worth $1.'),
+        fromTokenDecimals: decimalsSchema("fromToken"),
+        label: z.string().min(1).max(64).optional().describe("Your reference for this address (1-64 chars), filterable in list_deposit_addresses."),
+        metadata: z.record(z.string()).optional().describe("Up to 20 string key-value pairs stored on the address."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    (a) =>
+      run(async () => {
+        requireKey();
+        const [src, dst] = await Promise.all([resolveChain(a.fromChain), resolveChain(a.toChain)]);
+        const [srcToken, dstToken] = await Promise.all([resolveTokenLoose(src, a.fromToken, a.fromTokenDecimals), resolveTokenLoose(dst, a.toToken)]);
+        const recipient = a.recipient.trim();
+        const refundTo = a.refundTo.trim();
+        assertAddress(dst.vm, recipient, "recipient", dst.name);
+        assertAddress(src.vm, refundTo, "refundTo", src.name);
+        if (a.reusable === false && a.amount === undefined) throw new UserInputError("amount is required for a one-time address (reusable: false).");
+        if (a.metadata && Object.keys(a.metadata).length > 20) throw new UserInputError("metadata takes at most 20 keys.");
+        let amount: string | undefined;
+        if (a.amount !== undefined) {
+          if (srcToken.decimals === undefined) {
+            throw new UserInputError(`Token ${srcToken.address} is not in LayerHop's token list for ${src.name}, so its decimals are unknown. Pass fromTokenDecimals.`);
+          }
+          amount = toBaseUnits(a.amount, srcToken.decimals);
+        }
+        const created = await client.createDepositAddress({
+          srcChain: src.id,
+          srcToken: srcToken.address,
+          dstChain: dst.id,
+          dstToken: dstToken.address,
+          recipient,
+          refundTo,
+          ...(a.reusable !== undefined ? { reusable: a.reusable } : {}),
+          ...(amount ? { amount } : {}),
+          ...(a.label ? { label: a.label } : {}),
+          ...(a.metadata ? { metadata: a.metadata } : {}),
+        });
+        const d = await describeDeposit(created);
+        return {
+          summary: `${created.livemode ? "" : "TEST MODE (fake address, never send real funds): "}send ${d.view.send.token} on ${d.view.send.chain} to ${created.address}; it is delivered as ${d.view.deliver.token} on ${d.view.deliver.chain} to ${created.recipient}.`,
+          depositAddress: d.view,
+          estimate: formatDepositEstimate(created.estimate, created, d.lookup),
+          tellTheUser: d.tellTheUser,
+          nextSteps: [
+            "Show the user the address with the token, chain and every rule in tellTheUser (a QR code helps).",
+            "When the user says they sent funds, call refresh_deposit_address, then get_deposit_address to see the deposit and its status.",
+            ...(created.livemode ? [] : ["Test mode: call simulate_deposit to record a fake deposit."]),
+          ],
+        };
+      }),
+  );
+
+  server.registerTool(
+    "list_deposit_addresses",
+    {
+      title: "List deposit addresses",
+      description:
+        "List the deposit addresses of the API key's account and mode (live or test), newest first: address, route, status, deposit count. Needs a LayerHop API key. Read-only.",
+      inputSchema: {
+        status: z.enum(["active", "disabled"]).optional().describe("Only addresses with this status."),
+        label: z.string().min(1).max(64).optional().describe("Only addresses with this label."),
+        limit: z.number().int().min(1).max(100).optional().describe("Max addresses to return (default set by the API)."),
+        cursor: z.string().optional().describe("nextCursor from a previous call, for the next page."),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    (a) =>
+      run(async () => {
+        requireKey();
+        const r = await client.listDepositAddresses({ status: a.status, label: a.label, limit: a.limit, cursor: a.cursor });
+        const [chains, lookup] = await Promise.all([client.chains(), tokenLookup(r.depositAddresses.flatMap((d) => [d.chainId, d.dstChainId]))]);
+        const name = chainNameById(chains);
+        return {
+          count: r.depositAddresses.length,
+          depositAddresses: r.depositAddresses.map((d) => formatDepositAddress(d, name, lookup)),
+          nextCursor: r.nextCursor ?? null,
+        };
+      }),
+  );
+
+  server.registerTool(
+    "get_deposit_address",
+    {
+      title: "Get a deposit address and its deposits",
+      description: `Get one deposit address with its 20 most recent deposits (orders, quoteId starting with dep_): amount deposited and delivered, status (submitted, pending, filled, refunded, failed) and tx hashes. ${DEPOSIT_WARNING} Read-only.`,
+      inputSchema: { id: depositIdSchema },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    ({ id }) =>
+      run(async () => {
+        requireKey();
+        const r = await client.getDepositAddress(id);
+        const d = await describeDeposit(r);
+        const deposits = (r.deposits ?? []).map((o) => formatDepositOrder(o, d.lookup));
+        return {
+          depositAddress: d.view,
+          deposits,
+          tellTheUser: d.tellTheUser,
+          note: deposits.length
+            ? "Deposits are newest first. Each deposit is an order; status filled means the tokens were delivered to recipient."
+            : "No deposits detected yet. If the user just sent funds, call refresh_deposit_address and check again in ~15-30 s.",
+        };
+      }),
+  );
+
+  server.registerTool(
+    "refresh_deposit_address",
+    {
+      title: "Check a deposit address for deposits now",
+      description:
+        "Ask LayerHop to check a deposit address for new deposits right away (instead of waiting for the next scheduled check). Call it when the user says they sent funds, then call get_deposit_address after ~15-30 s. Needs a LayerHop API key.",
+      inputSchema: { id: depositIdSchema },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    ({ id }) =>
+      run(async () => {
+        requireKey();
+        const r = await client.refreshDepositAddress(id);
+        const d = await describeDeposit(r);
+        return { depositAddress: d.view, summary: `Checking ${r.address} for deposits now. Call get_deposit_address in ~15-30 s to see new deposits.` };
+      }),
+  );
+
+  server.registerTool(
+    "disable_deposit_address",
+    {
+      title: "Disable a deposit address",
+      description:
+        "Disable a deposit address: LayerHop stops tracking it (no more orders or webhooks for it). The provider may still process funds sent to it later, so the user must stop using it. Cannot be undone. Confirm with the user first. Needs a LayerHop API key.",
+      inputSchema: { id: depositIdSchema },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    },
+    ({ id }) =>
+      run(async () => {
+        requireKey();
+        const r = await client.disableDepositAddress(id);
+        const d = await describeDeposit(r);
+        return {
+          depositAddress: d.view,
+          summary: `Disabled ${r.address}. Tell the user to stop sending funds to it: deposits sent to it from now on are not tracked.`,
+        };
+      }),
+  );
+
+  server.registerTool(
+    "simulate_deposit",
+    {
+      title: "Simulate a deposit (test mode only)",
+      description:
+        "TEST MODE ONLY (lh_test_ key and a test deposit address): record a fake deposit so the integration can be tested end to end; it becomes a test order that settles with webhooks. The amount decides the outcome: base units ending in 4001 -> refunded, 4002 -> failed, anything else -> filled. Moves no real funds. Fails with a live key.",
+      inputSchema: {
+        id: depositIdSchema,
+        amount: amountSchema.optional().describe('Deposit amount in HUMAN units of the address token ("25" = 25 USDC). Give this or amountBaseUnits.'),
+        amountBaseUnits: z.string().regex(/^\d+$/, "integer string").optional().describe('Deposit amount in base units (e.g. "25004001" to test a refund for a 6-decimal token). Give this or amount.'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    (a) =>
+      run(async () => {
+        requireKey();
+        if (client.keyMode === "live") {
+          throw new UserInputError("simulate_deposit only works with a test key (lh_test_...). With a live key, deposits are real: send funds only to a live address.");
+        }
+        if ((a.amount === undefined) === (a.amountBaseUnits === undefined)) throw new UserInputError("Give exactly one of amount (human units) or amountBaseUnits.");
+        const da = await client.getDepositAddress(a.id);
+        if (da.livemode) throw new UserInputError("simulate_deposit only works on test-mode deposit addresses.");
+        const lookup = await tokenLookup([da.chainId, da.dstChainId]);
+        let base = a.amountBaseUnits;
+        if (base === undefined) {
+          const t = lookup(da.chainId, da.token);
+          if (!t) throw new UserInputError(`The address token ${da.token} is not in LayerHop's token list, so its decimals are unknown. Pass amountBaseUnits instead.`);
+          base = toBaseUnits(a.amount!, t.decimals);
+        }
+        if (BigInt(base) <= 0n) throw new UserInputError("Amount must be greater than 0.");
+        const order = await client.simulateDeposit(a.id, base);
+        const outcome = base.endsWith("4001") ? "refunded" : base.endsWith("4002") ? "failed" : "filled";
+        return {
+          order: formatDepositOrder(order, lookup),
+          summary: `Recorded a test deposit (order ${order.quoteId}, status ${order.status}). The sandbox will settle it as ${outcome}; check with get_deposit_address.`,
         };
       }),
   );

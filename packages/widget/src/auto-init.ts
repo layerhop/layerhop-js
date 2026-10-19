@@ -36,7 +36,7 @@ function list(value: string | undefined): string[] | undefined {
 /** Boolean options, read as flags (`data-lock-amount`, `data-show-usd="0"`, …). */
 const FLAG_OPTIONS = [
   "lockSrc", "lockDst", "lockAmount", "lockRecipient", "hideHistory", "hideHeader", "hideRoutes", "hideSettings", "hidePoweredBy",
-  "showUsd", "border", "autoResize", "liveUpdates",
+  "gasOnArrival", "showUsd", "border", "autoResize", "liveUpdates",
 ] as const;
 
 /** Plain string options. */

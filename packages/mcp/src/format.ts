@@ -177,3 +177,131 @@ export function formatBuiltTx(tx: BuiltTx, provider: string, quoteId: string, ct
       : {}),
   };
 }
+
+// ---------- deposit addresses ----------
+
+/** Resolves a token on a chain (by address/mint) for display; undefined when unknown. */
+export type TokenLookup = (chainId: number, address: string) => TokenInfo | undefined;
+
+/** The deposit-address fields the formatters read (matches the API's DepositAddress). */
+export interface DepositAddressLike {
+  id: string;
+  livemode: boolean;
+  status: string;
+  provider: string;
+  address: string;
+  chainId: number;
+  token: string;
+  dstChainId: number;
+  dstToken: string;
+  recipient: string;
+  refundTo: string;
+  reusable: boolean;
+  amount: string | null;
+  fees: { ourFeeBps: number; integratorFeeBps: number; integrator: string | null };
+  label: string | null;
+  metadata: Record<string, string> | null;
+  depositCount: number;
+  lastDepositAt: string | null;
+  createdAt: string;
+}
+
+export interface DepositOrderLike {
+  quoteId: string;
+  status: string;
+  statusDetail?: string | null;
+  srcChainId: number;
+  srcToken: string;
+  dstChainId: number;
+  dstToken: string;
+  amount: string;
+  dstAmount: string;
+  srcTxHash: string | null;
+  dstTxHash: string | null;
+  createdAt: string;
+}
+
+function humanAmount(lookup: TokenLookup, chainId: number, token: string, base: string | null | undefined): string | null {
+  if (base === null || base === undefined) return null;
+  if (!/^\d+$/.test(base)) return base;
+  const t = lookup(chainId, token);
+  return t ? `${fromBaseUnits(base, t.decimals)} ${t.symbol}` : `${base} (base units)`;
+}
+
+/** The rules an agent must relay to the user next to the address. */
+export function depositRules(da: DepositAddressLike, chainName: (id: number) => string, lookup: TokenLookup): string[] {
+  const sym = lookup(da.chainId, da.token)?.symbol ?? da.token;
+  const chain = chainName(da.chainId);
+  const rules = [
+    `Send ONLY ${sym} on ${chain} to ${da.address}. Any other token, or ${sym} on another chain, sent to this address may be lost for good.`,
+    "Send at least $1 worth; smaller deposits may never be picked up.",
+    `Refunds go to refundTo (${da.refundTo}), never back to an exchange. refundTo must be an address the user controls, never an exchange (CEX) deposit address.`,
+  ];
+  if (!da.reusable && da.amount) {
+    rules.push(
+      `One-time address: send exactly ${humanAmount(lookup, da.chainId, da.token, da.amount)}, once. An underpayment is refunded; do not reuse the address afterwards.`,
+    );
+  }
+  if (!da.livemode) rules.unshift("TEST MODE: this is a fake sandbox address. NEVER send real funds to it; use simulate_deposit instead.");
+  if (da.status === "disabled") rules.unshift("This address is DISABLED: stop showing it to the user. Deposits sent to it are no longer tracked.");
+  return rules;
+}
+
+export function formatDepositAddress(da: DepositAddressLike, chainName: (id: number) => string, lookup: TokenLookup) {
+  const src = lookup(da.chainId, da.token);
+  const dst = lookup(da.dstChainId, da.dstToken);
+  return {
+    id: da.id,
+    status: da.status,
+    mode: da.livemode ? "live" : "test",
+    provider: da.provider,
+    address: da.address,
+    send: { token: src?.symbol ?? da.token, tokenAddress: da.token, chain: chainName(da.chainId), chainId: da.chainId },
+    deliver: { token: dst?.symbol ?? da.dstToken, tokenAddress: da.dstToken, chain: chainName(da.dstChainId), chainId: da.dstChainId },
+    recipient: da.recipient,
+    refundTo: da.refundTo,
+    reusable: da.reusable,
+    amount: humanAmount(lookup, da.chainId, da.token, da.amount),
+    amountBaseUnits: da.amount,
+    fees: {
+      layerhop: { bps: da.fees.ourFeeBps, percent: bpsToPercent(da.fees.ourFeeBps) },
+      ...(da.fees.integratorFeeBps > 0 || da.fees.integrator
+        ? { partner: { id: da.fees.integrator, bps: da.fees.integratorFeeBps, percent: bpsToPercent(da.fees.integratorFeeBps) } }
+        : {}),
+    },
+    label: da.label,
+    metadata: da.metadata,
+    depositCount: da.depositCount,
+    lastDepositAt: da.lastDepositAt,
+    createdAt: da.createdAt,
+  };
+}
+
+export function formatDepositOrder(o: DepositOrderLike, lookup: TokenLookup) {
+  return {
+    quoteId: o.quoteId,
+    status: o.status,
+    ...(o.statusDetail ? { statusDetail: o.statusDetail } : {}),
+    deposited: humanAmount(lookup, o.srcChainId, o.srcToken, o.amount),
+    delivered: humanAmount(lookup, o.dstChainId, o.dstToken, o.dstAmount),
+    amountBaseUnits: o.amount,
+    dstAmountBaseUnits: o.dstAmount,
+    srcTxHash: o.srcTxHash,
+    dstTxHash: o.dstTxHash,
+    createdAt: o.createdAt,
+  };
+}
+
+export function formatDepositEstimate(
+  e: { amount: string; dstAmount: string; dstAmountMin: string; estimatedSeconds: number },
+  da: DepositAddressLike,
+  lookup: TokenLookup,
+) {
+  return {
+    ifYouSend: humanAmount(lookup, da.chainId, da.token, e.amount),
+    youReceive: humanAmount(lookup, da.dstChainId, da.dstToken, e.dstAmount),
+    minimumReceived: humanAmount(lookup, da.dstChainId, da.dstToken, e.dstAmountMin),
+    estimatedTime: formatEta(e.estimatedSeconds),
+    note: "A guide only: each deposit is priced when it arrives, after LayerHop and partner fees.",
+  };
+}

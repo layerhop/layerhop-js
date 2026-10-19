@@ -1,4 +1,15 @@
-import { LayerHop, LayerHopApiError, type QuoteResponse } from "@layerhop/sdk";
+import {
+  LayerHop,
+  LayerHopApiError,
+  type CreateDepositAddressParams,
+  type DepositAddress,
+  type DepositAddressCreated,
+  type DepositAddressList,
+  type DepositAddressStatus,
+  type DepositAddressWithDeposits,
+  type DepositOrder,
+  type QuoteResponse,
+} from "@layerhop/sdk";
 import { CHAINS, TOKENS, type BuiltTx, type Chain, type OrderStatus, type ProviderId, type Token } from "@layerhop/shared";
 
 
@@ -70,6 +81,13 @@ export class LayerHopClient {
 
   get apiUrl(): string {
     return this.baseUrl;
+  }
+
+  /** Which kind of API key this client sends (never the key itself). */
+  get keyMode(): "test" | "live" | "none" {
+    const k = this.opts.apiKey;
+    if (!k) return "none";
+    return k.startsWith("lh_test_") ? "test" : "live";
   }
 
   private async raw<T>(path: string, init?: RequestInit): Promise<T> {
@@ -193,6 +211,32 @@ export class LayerHopClient {
     if (Array.isArray(r)) return { orders: r as Record<string, unknown>[] };
     const o = r as { orders?: Record<string, unknown>[]; nextCursor?: string | null };
     return { orders: o.orders ?? [], nextCursor: o.nextCursor ?? null };
+  }
+
+  // ---------- deposit addresses (API key required) ----------
+
+  createDepositAddress(p: CreateDepositAddressParams): Promise<DepositAddressCreated> {
+    return this.viaSdk(() => this.sdk.depositAddresses.create(p), "POST /v1/deposit-addresses");
+  }
+
+  listDepositAddresses(p: { status?: DepositAddressStatus; label?: string; cursor?: string; limit?: number }): Promise<DepositAddressList> {
+    return this.viaSdk(() => this.sdk.depositAddresses.list(p), "GET /v1/deposit-addresses");
+  }
+
+  getDepositAddress(id: string): Promise<DepositAddressWithDeposits> {
+    return this.viaSdk(() => this.sdk.depositAddresses.get(id), "GET /v1/deposit-addresses/{id}");
+  }
+
+  refreshDepositAddress(id: string): Promise<DepositAddress> {
+    return this.viaSdk(() => this.sdk.depositAddresses.refresh(id), "POST /v1/deposit-addresses/{id}/refresh");
+  }
+
+  disableDepositAddress(id: string): Promise<DepositAddress> {
+    return this.viaSdk(() => this.sdk.depositAddresses.disable(id), "POST /v1/deposit-addresses/{id}/disable");
+  }
+
+  simulateDeposit(id: string, amount: string): Promise<DepositOrder> {
+    return this.viaSdk(() => this.sdk.depositAddresses.simulate(id, { amount }), "POST /v1/deposit-addresses/{id}/simulate");
   }
 
   /** Fetch a text document (e.g. docs llms.txt). */

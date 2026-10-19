@@ -25,6 +25,8 @@ export interface ChainInfo {
   providers: ProviderId[];
   /** Shown first in pickers. */
   popular: boolean;
+  /** Can be delivered to but not sent from (Hyperliquid). Hide it from source pickers. */
+  destinationOnly?: boolean;
 }
 
 /** A token as served by `GET /v1/tokens` and `/v1/tokens/lookup`. */

@@ -14,7 +14,7 @@ Usage:
 
 Environment:
   LAYERHOP_API_URL      default https://api.layerhop.com
-  LAYERHOP_API_KEY      optional API key (lh_live_...)
+  LAYERHOP_API_KEY      optional API key (lh_live_... / lh_test_...); required for deposit addresses
   LAYERHOP_INTEGRATOR   optional partner id for partner fees
   LAYERHOP_APP_URL      deep-link base, default https://layerhop.com
   PORT / HOST           defaults for --port / --host in HTTP mode

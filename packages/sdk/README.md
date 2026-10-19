@@ -74,6 +74,7 @@ try {
 | `checkout.refunds.create(sessionId, params?)` / `.list(sessionId)` | `/v1/checkout/sessions/{id}/refunds` | Refund a paid session from your own wallet (build, sign, report). |
 | `invoices.create / get / list / update / send / void` | `/v1/invoices` | Invoices emailed to a customer and paid through checkout (API key). |
 | `invoices.publicView(id)` / `invoices.pay(id)` | `/v1/invoices/{id}/public`, `/pay` | The customer's side (public). |
+| `subscriptions.create / get / list / update / cancel / pause / resume / invoices` | `/v1/subscriptions` | Recurring billing: an invoice emailed every period (API key). |
 | `depositAddresses.create / get / list / refresh / disable / simulate` | `/v1/deposit-addresses` | Deposit addresses (beta): your user sends tokens to an address, no wallet connection (API key). |
 
 ### Invoices and refunds
@@ -88,6 +89,13 @@ const invoice = await lh.invoices.create({
   settleChain: "base", settleToken: "USDC", recipient: "0xYourPayoutAddress",
   send: true,
 });
+
+// Bill every month: LayerHop emails each period's invoice; unpaid → past_due, reminders, cancel after 7 days.
+const sub = await lh.subscriptions.create({
+  customerEmail: "ada@example.com", interval: "month", description: "Pro plan",
+  amount: "49000000", settleChain: "base", settleToken: "USDC", recipient: "0xYourPayoutAddress",
+});
+await lh.subscriptions.cancel(sub.id, { atPeriodEnd: true });
 
 // Refund a paid session from your wallet (non-custodial): build, sign, report.
 const { refund, quote } = await lh.checkout.refunds.create("cs_...", { amount: "10000000", reason: "Partial refund" });

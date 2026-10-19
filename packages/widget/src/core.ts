@@ -109,6 +109,11 @@ export interface WidgetOptions {
   hideRoutes?: boolean;
   /** Hide the slippage settings. */
   hideSettings?: boolean;
+  /**
+   * Start with "Get gas on arrival" on: cross-chain swaps to an EVM chain also deliver ~$2 of the
+   * destination chain's native gas token. The user can still turn it off.
+   */
+  gasOnArrival?: boolean;
   /** Hide "Routed by LayerHop". Requires `integrator`; honoured once it's confirmed as a registered partner. */
   hidePoweredBy?: boolean;
   /** Show USD values (default `true`). */
@@ -492,6 +497,7 @@ export function buildEmbedUrl(options: WidgetOptions = {}, baseUrl: string = DEF
   }
   if (options.hideRoutes) p.set("hideRoutes", "1");
   if (options.hideSettings) p.set("hideSettings", "1");
+  if (options.gasOnArrival) p.set("gasOnArrival", "1");
   if (options.hideHistory) p.set("hideHistory", "1");
   if (options.hidePoweredBy) {
     if (!nonEmpty(options.integrator)) fail("hidePoweredBy needs your partner id in integrator");
@@ -623,6 +629,7 @@ const URL_OPTION_KEYS = [
   "hideRoutes",
   "hideSettings",
   "hidePoweredBy",
+  "gasOnArrival",
   "showUsd",
   "locale",
   "allowParentOrigin",

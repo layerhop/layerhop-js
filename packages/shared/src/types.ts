@@ -16,6 +16,24 @@ export interface QuoteRequest {
   recipient: string;
   slippageBps: number;
   channel: FeeChannel;
+  /**
+   * Gas on arrival: also deliver this much (USD) of the destination chain's native gas token to the
+   * recipient. Only cross-chain routes to an EVM chain with a non-native output honour it
+   * (`gasOnArrivalApplies`); providers that can't do it ignore it.
+   */
+  gasOnArrivalUsd?: number;
+}
+
+/** Native gas a quote delivers on top of `dstAmount` (gas on arrival). */
+export interface GasOnArrival {
+  /** Base units of the destination chain's native token, integer string. */
+  amount: string;
+  /** Native token address on the destination chain (EVM: 0x000…000). */
+  token: string;
+  symbol: string;
+  decimals: number;
+  /** USD value at quote time. */
+  usd?: number;
 }
 
 export interface FeeBreakdown {
@@ -31,6 +49,9 @@ export interface FeeBreakdown {
   integrator?: string;
 }
 
+/** A plain EVM call: target, calldata, native value (wei, integer string). */
+export type EvmCall = { to: string; data: string; value: string };
+
 export type EvmTx = {
   vm: "evm";
   chainId: ChainId;
@@ -39,6 +60,12 @@ export type EvmTx = {
   value: string; // wei, integer string
   /** ERC-20 approval the user must grant before sending `to/data`. */
   approval?: { token: string; spender: string; amount: string };
+  /**
+   * Further calls to send after `to/data`, in order, from the same wallet (e.g. LayerHop's fee
+   * transfer on a same-token checkout payment). Wallets with EIP-5792 `wallet_sendCalls` may batch
+   * them with the main call; otherwise each is its own transaction.
+   */
+  extraTxs?: EvmCall[];
   /** Test mode only: a placeholder that moves no funds. Never broadcast it. */
   sandbox?: true;
 };
@@ -67,6 +94,8 @@ export interface ProviderQuote {
   estimatedSeconds: number;
   fees: FeeBreakdown;
   expiresAt: number; // unix seconds
+  /** Set when the route also delivers native gas to the recipient (request.gasOnArrivalUsd). */
+  gasOnArrival?: GasOnArrival;
   /** Some providers return the transaction together with the quote. */
   tx?: BuiltTx;
   /** Provider-specific data needed by buildTx / status (never sent to clients). */
@@ -89,6 +118,11 @@ export interface FeeRecipients {
   jupiterReferralAccount?: string; // Jupiter Ultra-project referral account, used by the /order path (min 50 bps)
   /** mint → token account for Jupiter /build platform fees (any bps, no Jupiter cut). Preferred when set. */
   jupiterFeeAccounts?: Record<string, string>;
+  /**
+   * mint → referral token account under Jupiter's Trigger project, for limit-order fees (Trigger V1
+   * `feeAccount`, output mint only). Must exist on chain: the program rejects the order otherwise.
+   */
+  jupiterTriggerFeeAccounts?: Record<string, string>;
 }
 
 export interface ProviderContext {

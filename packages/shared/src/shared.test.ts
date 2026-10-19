@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addressVm, applyBps, CHAINS, DEFAULT_RPC_URLS, getChain, minAfterSlippage, POPULAR_CHAIN_IDS, rankQuotes, rpcUrl, SOLANA_CHAIN_ID, findToken, LayerHopError, paidWithLabel } from "./index.js";
+import { addressVm, applyBps, CHAINS, DEFAULT_RPC_URLS, getChain, minAfterSlippage, POPULAR_CHAIN_IDS, rankQuotes, rpcUrl, SOLANA_CHAIN_ID, findToken, LayerHopError, paidWithLabel, gasOnArrivalApplies, requestedGasOnArrivalUsd, HYPERLIQUID_CHAIN_ID, isDestinationOnly } from "./index.js";
 import type { ProviderQuote } from "./index.js";
 
 const q = (provider: ProviderQuote["provider"], dstAmount: string, estimatedSeconds = 10) =>
@@ -23,6 +23,28 @@ describe("shared", () => {
     const r = rankQuotes([q("relay", "100", 5), q("debridge", "120", 30), q("mayan", "120", 10)]);
     expect(r.map((x) => x.provider)).toEqual(["mayan", "debridge", "relay"]);
   });
+  it("ranks quotes that deliver gas on arrival first", () => {
+    const withGas = { ...q("relay", "100"), gasOnArrival: { amount: "1", token: "0x0", symbol: "ETH", decimals: 18 } } as ProviderQuote;
+    expect(rankQuotes([q("lifi", "120"), withGas]).map((x) => x.provider)).toEqual(["relay", "lifi"]);
+  });
+  it("gas on arrival applies only cross-chain to EVM with a non-native output", () => {
+    const usdcArb = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+    expect(gasOnArrivalApplies({ srcChainId: 8453, dstChainId: 42161, dstToken: usdcArb })).toBe(true);
+    expect(gasOnArrivalApplies({ srcChainId: 42161, dstChainId: 42161, dstToken: usdcArb })).toBe(false);
+    expect(gasOnArrivalApplies({ srcChainId: 8453, dstChainId: 42161, dstToken: "0x0000000000000000000000000000000000000000" })).toBe(false);
+    expect(gasOnArrivalApplies({ srcChainId: 8453, dstChainId: SOLANA_CHAIN_ID, dstToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" })).toBe(false);
+    expect(gasOnArrivalApplies({ srcChainId: 8453, dstChainId: HYPERLIQUID_CHAIN_ID, dstToken: "0x0000000000000000000000000000000000000001" })).toBe(false);
+    expect(requestedGasOnArrivalUsd({ srcChainId: 8453, dstChainId: 42161, dstToken: usdcArb, gasOnArrivalUsd: 2 })).toBe(2);
+    expect(requestedGasOnArrivalUsd({ srcChainId: 8453, dstChainId: 42161, dstToken: usdcArb })).toBeUndefined();
+  });
+  it("lists Hyperliquid as a destination-only EVM-style chain", () => {
+    const hl = getChain("hyperliquid");
+    expect(hl?.id).toBe(HYPERLIQUID_CHAIN_ID);
+    expect(hl?.vm).toBe("evm");
+    expect(hl?.nativeDecimals).toBe(8);
+    expect(isDestinationOnly(HYPERLIQUID_CHAIN_ID)).toBe(true);
+    expect(isDestinationOnly(8453)).toBe(false);
+  });
   it("penalizes slow routes: +0.08% output but 18 min slower loses", () => {
     const r = rankQuotes([q("lifi", "99750000", 1080), q("relay", "99667084", 1)]);
     expect(r[0]!.provider).toBe("relay");
@@ -44,7 +66,8 @@ describe("shared", () => {
       expect(c.explorerTx, c.slug).toMatch(/^https:\/\/.+\/tx\/$/);
       expect(c.explorerAddress, c.slug).toMatch(/^https:\/\/.+\/(address|account)\/$/);
       expect(c.providers.length, c.slug).toBeGreaterThan(0);
-      expect(DEFAULT_RPC_URLS[c.id], c.slug).toMatch(/^https:\/\//);
+      // Destination-only chains (Hyperliquid) have no EVM JSON-RPC: nothing is sent or read there.
+      if (!c.destinationOnly) expect(DEFAULT_RPC_URLS[c.id], c.slug).toMatch(/^https:\/\//);
       expect(c.popular).toBe(POPULAR_CHAIN_IDS.includes(c.id));
     }
     expect(getChain("berachain")).toMatchObject({ id: 80094, nativeSymbol: "BERA" });
@@ -68,6 +91,26 @@ describe("emails", () => {
     expect(inv.html).not.toContain("<script");
     expect(invoiceEmail({ merchant: "<script>x</script>", number: "1", lines: [], total: "1", settlement: "s", url: "u" }).html).toContain("&lt;script&gt;");
     expect(oneLine(" a   b ")).toBe("a b");
+  });
+});
+
+describe("subscription periods", () => {
+  it("adds intervals in UTC, keeping the anchor day and clamping to short months", async () => {
+    const { addInterval, subscriptionPeriod, intervalLabel, invoiceReminderEmail } = await import("./index.js");
+    const jan31 = new Date("2026-01-31T10:00:00Z");
+    expect(addInterval(jan31, "month", 1).toISOString()).toBe("2026-02-28T10:00:00.000Z");
+    expect(addInterval(jan31, "month", 2).toISOString()).toBe("2026-03-31T10:00:00.000Z");
+    expect(addInterval(jan31, "month", 13).toISOString()).toBe("2027-02-28T10:00:00.000Z");
+    expect(addInterval(new Date("2028-02-29T00:00:00Z"), "year", 1).toISOString()).toBe("2029-02-28T00:00:00.000Z");
+    expect(addInterval(jan31, "week", 2).toISOString()).toBe("2026-02-14T10:00:00.000Z");
+    expect(addInterval(jan31, "day", 1).toISOString()).toBe("2026-02-01T10:00:00.000Z");
+    const p = subscriptionPeriod(jan31, "month", 3, 1);
+    expect([p.start.toISOString(), p.end.toISOString()]).toEqual(["2026-04-30T10:00:00.000Z", "2026-07-31T10:00:00.000Z"]);
+    expect(intervalLabel("month", 1)).toBe("month");
+    expect(intervalLabel("week", 2)).toBe("2 weeks");
+    const r = invoiceReminderEmail({ merchant: "Acme\r\n", number: "INV-2", total: "9.00 USDC", dueDate: "2026-10-21", cancelsOn: "2026-10-28", url: "https://layerhop.com/invoice/x" });
+    expect(r.subject).not.toMatch(/[\r\n]/);
+    expect(r.text).toContain("2026-10-28");
   });
 });
 

@@ -14,9 +14,15 @@ export function effectiveOutput(q: ProviderQuote): bigint {
   return (BigInt(q.dstAmount) * BigInt(10_000 - penaltyBps)) / 10_000n;
 }
 
-/** Best for the user first: highest time-adjusted output, then fastest. Never rank by what pays us most. */
+/**
+ * Best for the user first: highest time-adjusted output, then fastest. Never rank by what pays us most.
+ * Quotes that deliver requested gas on arrival come first: their output is lower by the gas they
+ * add, so comparing them with routes that ignored the request would always punish them.
+ */
 export function rankQuotes(quotes: ProviderQuote[]): ProviderQuote[] {
   return [...quotes].sort((a, b) => {
+    const gas = Number(!a.gasOnArrival) - Number(!b.gasOnArrival);
+    if (gas !== 0) return gas;
     const diff = effectiveOutput(b) - effectiveOutput(a);
     if (diff !== 0n) return diff > 0n ? 1 : -1;
     return a.estimatedSeconds - b.estimatedSeconds;

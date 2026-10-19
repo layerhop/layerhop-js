@@ -15,10 +15,29 @@ export interface Chain {
   /** Providers that route from or to this chain (snapshot; the API serves the live list). */
   providers?: ProviderId[];
   popular?: boolean;
+  /** Can be delivered to, not sent from (Hyperliquid). */
+  destinationOnly?: boolean;
 }
 
 /** LayerHop internal id for Solana (EVM chains use their real chain id). */
 export const SOLANA_CHAIN_ID = 7565164;
+
+/**
+ * Hyperliquid (HyperCore: the perps/spot exchange, not HyperEVM 999). Relay's id, used as ours.
+ * Accounts are 0x addresses, so it is treated as an EVM-style chain; it is a destination only
+ * (withdrawals need Hyperliquid-signed actions we don't build). Its "native" coin is the perps USDC
+ * balance (8 decimals), canonical address EVM_NATIVE (0x000…000) inside LayerHop.
+ */
+export const HYPERLIQUID_CHAIN_ID = 1337;
+/** Relay's address for Hyperliquid perps USDC (16 bytes, not an EVM address). */
+export const HYPERLIQUID_PERPS_USDC = "0x00000000000000000000000000000000";
+
+/** Chains users can deliver to but not send from. */
+export const DESTINATION_ONLY_CHAIN_IDS: ReadonlySet<ChainId> = new Set([HYPERLIQUID_CHAIN_ID]);
+
+export function isDestinationOnly(chainId: ChainId): boolean {
+  return DESTINATION_ONLY_CHAIN_IDS.has(chainId);
+}
 
 /**
  * Static chain registry: every chain at least one of our providers listed when it was last

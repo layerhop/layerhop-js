@@ -336,3 +336,114 @@ describe("listen + trigger", () => {
     expect(await run(["trigger", "nope"], io(undefined, { env: { LAYERHOP_API_KEY: TEST_KEY } }).io)).toBe(2);
   });
 });
+
+describe("deposit-address", () => {
+  const TEST_KEY = `lh_test_${"a".repeat(32)}`;
+  const LIVE_KEY = `lh_live_${"b".repeat(32)}`;
+  const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const ARB_USDC = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+  const da = {
+    id: "da_1", object: "deposit_address", livemode: false, status: "active", provider: "sandbox",
+    address: "0x1234567890abcdef1234567890abcdef12345678", chainId: 8453, token: BASE_USDC, dstChainId: 42161, dstToken: ARB_USDC,
+    recipient: SENDER, refundTo: SENDER, reusable: true, amount: null, fees: { ourFeeBps: 20, integratorFeeBps: 0, integrator: null },
+    label: "user-1", metadata: null, depositCount: 1, lastDepositAt: null, createdAt: "2026-10-19T10:00:00.000Z",
+  };
+  const order = {
+    quoteId: "dep_1", status: "filled", provider: "sandbox", srcChainId: 8453, srcToken: BASE_USDC, dstChainId: 42161, dstToken: ARB_USDC,
+    amount: "25000000", dstAmount: "24950000", srcTxHash: "0xabc", dstTxHash: null, createdAt: "2026-10-19T10:01:00.000Z",
+  };
+  const bodies: { url: string; method: string; body: unknown }[] = [];
+  const api = (key = TEST_KEY) =>
+    io((url, init) => {
+      const method = init?.method ?? "GET";
+      bodies.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      expect((init?.headers as Record<string, string>)["x-api-key"]).toBe(key);
+      const path = new URL(url).pathname;
+      if (path === "/v1/deposit-addresses" && method === "POST") return [201, { ...da, estimate: { amount: "100000000", dstAmount: "99780000", dstAmountMin: "99280000", estimatedSeconds: 20 } }];
+      if (path === "/v1/deposit-addresses") return [200, { depositAddresses: [da], nextCursor: "cur_2" }];
+      if (path === "/v1/deposit-addresses/da_1") return [200, { ...da, deposits: [order] }];
+      if (path === "/v1/deposit-addresses/da_1/refresh") return [202, da];
+      if (path === "/v1/deposit-addresses/da_1/disable") return [200, { ...da, status: "disabled" }];
+      if (path === "/v1/deposit-addresses/da_1/simulate") return [201, { order: { ...order, status: "submitted", amount: (JSON.parse(String(init!.body)) as { amount: string }).amount } }];
+      return [404, { error: { code: "NOT_FOUND", message: "nope" } }];
+    }, { env: { LAYERHOP_API_KEY: key } });
+  afterEach(() => void bodies.splice(0));
+
+  it("create converts the amount, sends the route and prints the address with the rules", async () => {
+    const t = api();
+    const code = await run(["deposit-address", "create", "USDC", "base", "USDC", "arbitrum", "--recipient", SENDER, "--refund-to", SENDER, "--amount", "25", "--one-time", "--label", "user-1", "--metadata", "user=1,plan=pro"], t.io);
+    expect(code).toBe(0);
+    expect(bodies[0]!.body).toMatchObject({ srcChain: "base", srcToken: "USDC", dstChain: "arbitrum", dstToken: "USDC", recipient: SENDER, refundTo: SENDER, reusable: false, amount: "25000000", label: "user-1", metadata: { user: "1", plan: "pro" } });
+    const out = t.text();
+    expect(out).toMatch(/address\s+0x1234567890abcdef1234567890abcdef12345678/);
+    expect(out).toMatch(/send\s+USDC on base/);
+    expect(out).toMatch(/Estimate: 100 USDC -> ~99.78 USDC \(min 99.28 USDC\)/);
+    expect(out).toMatch(/TEST MODE/);
+    expect(out).toMatch(/Send ONLY USDC on Base/);
+    expect(out).toMatch(/at least \$1/);
+    expect(out).toMatch(/never an exchange \(CEX\) deposit address/);
+  });
+
+  it("create --json prints the API response", async () => {
+    const t = api();
+    expect(await run(["deposit-address", "create", "USDC", "base", "USDC", "arbitrum", "--recipient", SENDER, "--refund-to", SENDER, "--json"], t.io)).toBe(0);
+    expect(JSON.parse(t.text())).toMatchObject({ id: "da_1", estimate: { amount: "100000000" } });
+    expect(bodies[0]!.body).not.toHaveProperty("amount");
+  });
+
+  it("list, get, refresh, disable", async () => {
+    let t = api();
+    expect(await run(["deposit-address", "list", "--status", "active", "--label", "user-1", "--limit", "5"], t.io)).toBe(0);
+    const q = new URL(bodies[0]!.url).searchParams;
+    expect([q.get("status"), q.get("label"), q.get("limit")]).toEqual(["active", "user-1", "5"]);
+    expect(t.text()).toMatch(/da_1\s+active\s+test\s+0x1234\S+\s+USDC@base -> USDC@arbitrum\s+1\s+user-1/);
+    expect(t.text()).toMatch(/--cursor cur_2/);
+
+    t = api();
+    expect(await run(["deposit-address", "get", "da_1"], t.io)).toBe(0);
+    expect(t.text()).toMatch(/dep_1\s+filled\s+25 USDC\s+24.95 USDC\s+0xabc/);
+
+    t = api();
+    expect(await run(["deposit-addresses", "refresh", "da_1"], t.io)).toBe(0);
+    expect(t.text()).toMatch(/Checking .* for deposits now/);
+    expect(bodies.at(-1)).toMatchObject({ method: "POST" });
+
+    t = api();
+    expect(await run(["deposit-address", "disable", "da_1", "--json"], t.io)).toBe(0);
+    expect(JSON.parse(t.text()).status).toBe("disabled");
+  });
+
+  it("simulate converts human amounts with a test key and refuses live keys", async () => {
+    let t = api();
+    expect(await run(["deposit-address", "simulate", "da_1", "25.004001"], t.io)).toBe(0);
+    expect(bodies.at(-1)!.body).toEqual({ amount: "25004001" });
+    expect(t.text()).toMatch(/Recorded test deposit dep_1 .*settles it as refunded/);
+
+    t = api();
+    expect(await run(["deposit-address", "simulate", "da_1", "25000000", "--base-units"], t.io)).toBe(0);
+    expect(bodies.at(-1)!.body).toEqual({ amount: "25000000" });
+
+    expect(await run(["deposit-address", "simulate", "da_1", "25"], api(LIVE_KEY).io)).toBe(2);
+  });
+
+  it("validates arguments and needs an API key", async () => {
+    const noKey = io();
+    expect(await run(["deposit-address", "list"], noKey.io)).toBe(2);
+    expect(noKey.err.join("\n")).toMatch(/needs an API key/);
+    expect(noKey.urls).toHaveLength(0);
+    expect(await run(["deposit-address"], api().io)).toBe(2);
+    expect(await run(["deposit-address", "bogus"], api().io)).toBe(2);
+    expect(await run(["deposit-address", "create", "USDC", "base", "USDC", "arbitrum", "--recipient", SENDER], api().io)).toBe(2);
+    expect(await run(["deposit-address", "create", "USDC", "base", "USDC", "arbitrum", "--recipient", SENDER, "--refund-to", SENDER, "--one-time"], api().io)).toBe(2);
+    expect(await run(["deposit-address", "create", "USDC", "base", "USDC", "arbitrum", "--recipient", SENDER, "--refund-to", SENDER, "--metadata", "oops"], api().io)).toBe(2);
+    expect(await run(["deposit-address", "get", "q_1"], api().io)).toBe(2);
+    expect(await run(["deposit-address", "list", "--status", "weird"], api().io)).toBe(2);
+    expect(bodies).toHaveLength(0);
+  });
+
+  it("surfaces API errors with exit code 1", async () => {
+    const t = io(() => [403, { error: { code: "FORBIDDEN", message: "Deposit addresses are not enabled for live mode yet" } }], { env: { LAYERHOP_API_KEY: LIVE_KEY } });
+    expect(await run(["deposit-address", "create", "USDC", "base", "USDC", "arbitrum", "--recipient", SENDER, "--refund-to", SENDER], t.io)).toBe(1);
+    expect(t.err.join("\n")).toMatch(/FORBIDDEN: Deposit addresses are not enabled/);
+  });
+});

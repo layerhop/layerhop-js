@@ -87,6 +87,8 @@ export interface InvoiceEmailInput {
   memo?: string | null;
   url: string;
   test?: boolean;
+  /** Subscription invoices: e.g. "Subscription renews every month." (shown under the lines). */
+  recurring?: string | null;
 }
 
 export function invoiceEmail(i: InvoiceEmailInput): EmailContent {
@@ -95,6 +97,7 @@ export function invoiceEmail(i: InvoiceEmailInput): EmailContent {
   const body = `<p style="margin:0">${i.customerName ? `Hi ${esc(i.customerName)},<br><br>` : ""}${esc(i.merchant)} sent you invoice <b>${esc(i.number)}</b> for <b>${esc(i.total)}</b>${esc(due)}.</p>
 ${linesTable(i.lines, i.total)}
 ${i.memo ? `<p style="margin:0 0 18px;color:#546070">${esc(i.memo)}</p>` : ""}
+${i.recurring ? `<p style="margin:0 0 18px;color:#546070">${esc(i.recurring)}</p>` : ""}
 <p style="margin:0 0 22px">Pay with any token on any chain from your own wallet. ${esc(i.merchant)} receives ${esc(i.settlement)}.</p>
 <p style="margin:0">${button(i.url, `Pay ${i.total}`)}</p>
 ${i.test ? `<p style="margin:18px 0 0;color:#a16207">Test invoice: paying it is simulated and moves no real funds.</p>` : ""}`;
@@ -105,6 +108,7 @@ ${i.test ? `<p style="margin:18px 0 0;color:#a16207">Test invoice: paying it is 
     ...i.lines.map((l) => `- ${l.description}${l.quantity !== 1 ? ` x ${l.quantity}` : ""}: ${l.total}`),
     `Total: ${i.total}`,
     i.memo ? `\n${i.memo}` : "",
+    i.recurring ? `\n${i.recurring}` : "",
     "",
     `Pay with any token on any chain: ${i.url}`,
     i.test ? "\nTest invoice: paying it is simulated and moves no real funds." : "",
@@ -112,6 +116,39 @@ ${i.test ? `<p style="margin:18px 0 0;color:#a16207">Test invoice: paying it is 
     NONCUSTODIAL,
   ].filter((l) => l !== "").join("\n");
   return { subject, html: shell(`Invoice ${i.number}`, body, `${NONCUSTODIAL} Questions about this invoice? Reply to ${esc(i.merchant)} directly.`), text };
+}
+
+export interface InvoiceReminderEmailInput {
+  merchant: string;
+  number: string;
+  customerName?: string | null;
+  total: string;
+  /** e.g. "2026-10-21" */
+  dueDate: string;
+  /** The subscription is canceled if still unpaid on this date. */
+  cancelsOn?: string | null;
+  url: string;
+  test?: boolean;
+}
+
+/** Past-due reminder for a subscription invoice. */
+export function invoiceReminderEmail(i: InvoiceReminderEmailInput): EmailContent {
+  const subject = oneLine(`${i.test ? "[TEST] " : ""}Reminder: invoice ${i.number} from ${i.merchant} is overdue (${i.total})`);
+  const cancel = i.cancelsOn ? ` If it is still unpaid on ${i.cancelsOn}, your subscription will be canceled.` : "";
+  const body = `<p style="margin:0">${i.customerName ? `Hi ${esc(i.customerName)},<br><br>` : ""}Invoice <b>${esc(i.number)}</b> from ${esc(i.merchant)} for <b>${esc(i.total)}</b> was due on ${esc(i.dueDate)} and is still unpaid.${esc(cancel)}</p>
+<p style="margin:18px 0 22px">Pay with any token on any chain from your own wallet.</p>
+<p style="margin:0">${button(i.url, `Pay ${i.total}`)}</p>
+${i.test ? `<p style="margin:18px 0 0;color:#a16207">Test invoice: paying it is simulated and moves no real funds.</p>` : ""}`;
+  const text = [
+    i.customerName ? `Hi ${i.customerName},` : "",
+    `Invoice ${i.number} from ${i.merchant} for ${i.total} was due on ${i.dueDate} and is still unpaid.${cancel}`,
+    "",
+    `Pay with any token on any chain: ${i.url}`,
+    i.test ? "\nTest invoice: paying it is simulated and moves no real funds." : "",
+    "",
+    NONCUSTODIAL,
+  ].filter((l) => l !== "").join("\n");
+  return { subject, html: shell(`Invoice ${i.number} is overdue`, body, `${NONCUSTODIAL} Questions about this invoice? Reply to ${esc(i.merchant)} directly.`), text };
 }
 
 export interface ReceiptEmailInput {

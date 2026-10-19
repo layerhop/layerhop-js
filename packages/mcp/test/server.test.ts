@@ -8,7 +8,23 @@ describe("tool listing", () => {
     const { client } = await connect(mockApi().fetch);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ["build_transaction", "get_order_status", "get_quote", "get_swap_link", "list_chains", "list_orders", "list_tokens", "report_submitted", "simulate_transaction"].sort(),
+      [
+        "build_transaction",
+        "create_deposit_address",
+        "disable_deposit_address",
+        "get_deposit_address",
+        "get_order_status",
+        "get_quote",
+        "get_swap_link",
+        "list_chains",
+        "list_deposit_addresses",
+        "list_orders",
+        "list_tokens",
+        "refresh_deposit_address",
+        "report_submitted",
+        "simulate_deposit",
+        "simulate_transaction",
+      ].sort(),
     );
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
     expect(byName.build_transaction!.description).toMatch(/never signs/);

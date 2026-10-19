@@ -1,13 +1,14 @@
 import type {
-  BalancesResponse, BuiltTx, ChainInfo, FeeBreakdown, FeeChannel, OrderStatus, PricesResponse, ProviderId, TokenInfo, TokensResponse,
+  BalancesResponse, BuiltTx, ChainInfo, FeeBreakdown, FeeChannel, GasOnArrival, OrderStatus, PricesResponse, ProviderId, SvmTx, TokenInfo, TokensResponse,
 } from "@layerhop/shared";
 
 export type {
-  BuiltTx, EvmTx, SvmTx, OrderStatus, ProviderId, FeeChannel, FeeBreakdown,
+  BuiltTx, EvmTx, EvmCall, SvmTx, OrderStatus, ProviderId, FeeChannel, FeeBreakdown, GasOnArrival,
   ChainInfo, TokenInfo, Balance, TokensResponse, PricesResponse, BalancesResponse,
 } from "@layerhop/shared";
 export {
-  CHAINS, TOKENS, getChain, findToken, SOLANA_CHAIN_ID, EVM_NATIVE, SOL_NATIVE,
+  CHAINS, TOKENS, getChain, findToken, SOLANA_CHAIN_ID, EVM_NATIVE, SOL_NATIVE, HYPERLIQUID_CHAIN_ID,
+  gasOnArrivalApplies, DEFAULT_GAS_ON_ARRIVAL_USD,
   SETTLEMENT_TOKENS, findSettlementToken, SANDBOX_MAGIC_AMOUNTS,
 } from "@layerhop/shared";
 
@@ -41,6 +42,12 @@ export interface QuoteParams {
   sender: string;
   recipient: string;
   slippageBps?: number;
+  /**
+   * Also deliver native gas on the destination chain: `true` = $2, or a USD amount (0.5–20).
+   * Ignored for same-chain swaps, non-EVM destinations and native outputs; providers that can't do
+   * it ignore it (check `quote.gasOnArrival`).
+   */
+  gasOnArrival?: boolean | number;
 }
 
 export interface Quote {
@@ -51,6 +58,8 @@ export interface Quote {
   estimatedSeconds: number;
   fees: FeeBreakdown;
   expiresAt: number;
+  /** Native gas delivered to the recipient on top of `dstAmount` (when requested and included). */
+  gasOnArrival?: GasOnArrival;
 }
 
 export interface QuoteResponse {
@@ -91,6 +100,8 @@ export interface OrderSummary {
   refundId?: string | null;
   /** The deposit address this order came from, if any (`quoteId` then starts with `dep_`). */
   depositAddressId?: string | null;
+  /** The limit order this order is a fill of, if any (`quoteId` then starts with `lof_`). */
+  limitOrderId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -272,7 +283,9 @@ export interface CheckoutQuoteResponse {
 export type WebhookEventType =
   | "order.submitted" | "order.filled" | "order.refunded" | "order.failed"
   | "checkout.session.processing" | "checkout.session.completed" | "checkout.session.payment_failed" | "checkout.session.expired"
-  | "checkout.session.refunded" | "invoice.sent" | "invoice.paid";
+  | "checkout.session.refunded" | "invoice.sent" | "invoice.paid"
+  | "subscription.created" | "subscription.renewed" | "subscription.past_due" | "subscription.canceled"
+  | "limit_order.opened" | "limit_order.filled" | "limit_order.cancelled" | "limit_order.expired" | "limit_order.failed";
 
 export type InvoiceStatus = "draft" | "open" | "paid" | "void";
 
@@ -337,6 +350,8 @@ export interface Invoice extends PublicInvoice {
   recipient: string;
   /** The checkout session paying the invoice, once the customer started paying. */
   sessionId: string | null;
+  /** The subscription this invoice bills a period of (issued by LayerHop's billing), if any. */
+  subscriptionId?: string | null;
   sentAt: string | null;
   receiptSentAt: string | null;
   voidedAt: string | null;
@@ -345,6 +360,93 @@ export interface Invoice extends PublicInvoice {
 
 export interface InvoiceList {
   invoices: Invoice[];
+  nextCursor: string | null;
+}
+
+/**
+ * `active` (billing each period), `past_due` (an invoice is unpaid past its due date: reminders go
+ * out and renewals wait), `paused` (no invoices or reminders), `canceled` (by you, or 7 days past due).
+ */
+export type SubscriptionStatus = "active" | "past_due" | "canceled" | "paused";
+export type SubscriptionInterval = "day" | "week" | "month" | "year";
+
+export interface CreateSubscriptionParams {
+  /** Where each period's invoice and the reminders are emailed. */
+  customerEmail: string;
+  interval: SubscriptionInterval;
+  /** Bill every `intervalCount` intervals (1–365, default 1; 3 + "month" = quarterly). */
+  intervalCount?: number;
+  /** Bill a product's price, settlement token and payout address (instead of the four fields below). */
+  productId?: string;
+  /** Price per period, integer string in base units of the settlement token. */
+  amount?: string;
+  /** Settlement chain id or slug: ethereum, arbitrum, base, optimism, bsc, polygon or solana. */
+  settleChain?: string | number;
+  /** "USDC" or "USDT" (or its address) on that chain. */
+  settleToken?: string;
+  /** Your payout address on the settlement chain. */
+  recipient?: string;
+  /** The invoice line item, e.g. "Pro plan" (required without `productId`). */
+  description?: string;
+  customerName?: string | null;
+  merchantName?: string | null;
+  memo?: string | null;
+  /** Days after an invoice is issued that it is due (0–60, default 3). */
+  daysUntilDue?: number;
+  /** ISO date-time of the first period and invoice (default now, at most 366 days ahead). */
+  startAt?: string;
+  metadata?: Record<string, string> | null;
+}
+
+/** Changes apply from the next invoice. `cancelAtPeriodEnd: false` undoes a scheduled cancel. */
+export interface UpdateSubscriptionParams {
+  customerEmail?: string;
+  customerName?: string | null;
+  merchantName?: string | null;
+  description?: string;
+  memo?: string | null;
+  amount?: string;
+  daysUntilDue?: number;
+  metadata?: Record<string, string> | null;
+  cancelAtPeriodEnd?: boolean;
+}
+
+export interface Subscription {
+  id: string;
+  object: "subscription";
+  livemode: boolean;
+  status: SubscriptionStatus;
+  customerEmail: string;
+  customerName: string | null;
+  merchantName: string | null;
+  description: string;
+  memo: string | null;
+  productId: string | null;
+  /** Price per period, base units of the settlement token. */
+  amount: string;
+  settlement: { chainId: number; token: string; symbol: string; decimals: number };
+  recipient: string;
+  interval: SubscriptionInterval;
+  intervalCount: number;
+  daysUntilDue: number;
+  currentPeriodStart: string | null;
+  currentPeriodEnd: string | null;
+  /** When the next invoice is issued (null when paused or canceled). */
+  nextInvoiceAt: string | null;
+  cancelAt: string | null;
+  cancelAtPeriodEnd: boolean;
+  canceledAt: string | null;
+  /** "requested" (you canceled) or "unpaid" (7 days past due). */
+  cancellationReason: string | null;
+  pausedAt: string | null;
+  latestInvoiceId: string | null;
+  metadata: Record<string, string> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SubscriptionList {
+  subscriptions: Subscription[];
   nextCursor: string | null;
 }
 
@@ -431,6 +533,76 @@ export interface DepositAddressWithDeposits extends DepositAddress {
 
 export interface DepositAddressList {
   depositAddresses: DepositAddress[];
+  nextCursor: string | null;
+}
+
+export type LimitOrderStatus = "built" | "open" | "filled" | "cancelled" | "expired" | "failed";
+
+export interface CreateLimitOrderParams {
+  /** The maker wallet (base58): signs the order and receives the output. */
+  wallet: string;
+  /** Token to sell: mint, curated symbol (`USDC`) or `SOL`. */
+  srcToken: string;
+  /** Token to buy. Our fee applies when it is SOL, USDC or USDT. */
+  dstToken: string;
+  /** Base units of `srcToken` to sell (worth at least $5). */
+  amount: string;
+  /** Minimum base units of `dstToken` for the whole `amount`: the limit price is `dstAmount / amount`. */
+  dstAmount: string;
+  /** Unix seconds, at least 60 s ahead. Omit for good-till-cancelled. */
+  expiresAt?: number;
+  /** Only `solana` for now (the default). */
+  chain?: string | number;
+  /** Up to 20 string key-value pairs. */
+  metadata?: Record<string, string>;
+  /** Partner id whose fee applies, as for quotes. */
+  integrator?: string;
+  /** Partner fee in bps (up to your partner `maxFeeBps`), as for quotes. */
+  integratorFeeBps?: number;
+}
+
+/** A Solana limit order (Jupiter Trigger). Fills are orders whose `quoteId` starts with `lof_`. */
+export interface LimitOrder {
+  id: string;
+  object: "limit_order";
+  livemode: boolean;
+  status: LimitOrderStatus;
+  statusDetail: string | null;
+  /** `jupiter` (live) or `sandbox` (test mode). */
+  provider: string;
+  chainId: number;
+  wallet: string;
+  srcToken: string;
+  dstToken: string;
+  amount: string;
+  dstAmount: string;
+  expiresAt: string | null;
+  /** The fee written into the on-chain order (0 when `dstToken` carries no fee). */
+  fees: { ourFeeBps: number; integratorFeeBps: number; integrator: string | null };
+  providerOrderId: string;
+  filledAmount: string;
+  filledDstAmount: string;
+  fillCount: number;
+  openTxHash: string | null;
+  /** Set once a cancel tx was submitted; the status turns `cancelled` when the provider confirms. */
+  cancelTxHash: string | null;
+  channel: FeeChannel;
+  metadata: Record<string, string> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `create` response: the order plus the unsigned tx (`submitViaApi: true`) for `wallet` to sign. */
+export interface LimitOrderCreated extends LimitOrder {
+  tx: SvmTx;
+}
+
+export interface LimitOrderWithFills extends LimitOrder {
+  fills: OrderSummary[];
+}
+
+export interface LimitOrderList {
+  limitOrders: LimitOrder[];
   nextCursor: string | null;
 }
 
@@ -522,7 +694,7 @@ export interface WebhookEventPayload {
   /** Present on samples from the dashboard or `trigger`. */
   sample?: boolean;
   createdAt: string;
-  data: { order?: OrderSummary; session?: CheckoutSession | null; refund?: Refund; invoice?: Partial<Invoice>; [k: string]: unknown };
+  data: { order?: OrderSummary; session?: CheckoutSession | null; refund?: Refund; invoice?: Partial<Invoice>; subscription?: Subscription; [k: string]: unknown };
 }
 
 /** A token for `prices()`: `"chainId:address"` or `{ chainId, address }`. */
@@ -606,6 +778,8 @@ export class LayerHop {
     });
     if (this.opts.integrator) q.set("integrator", this.opts.integrator);
     if (this.opts.integratorFeeBps !== undefined) q.set("integratorFeeBps", String(this.opts.integratorFeeBps));
+    if (typeof p.gasOnArrival === "number") q.set("gasOnArrivalUsd", String(p.gasOnArrival));
+    else if (p.gasOnArrival) q.set("gasOnArrival", "true");
     return this.call(`/quote?${q}`);
   }
 
@@ -729,6 +903,39 @@ export class LayerHop {
   };
 
   /**
+   * Subscriptions (API key): recurring billing. Crypto can't be pulled from a wallet, so LayerHop
+   * issues and emails an invoice every period; the customer pays it with any token. Unpaid past the
+   * due date → `past_due` with reminders (day 1 and 3), canceled after 7 days.
+   */
+  readonly subscriptions = {
+    create: (p: CreateSubscriptionParams): Promise<Subscription> =>
+      this.call("/subscriptions", { method: "POST", body: JSON.stringify(p) }),
+    get: (id: string): Promise<Subscription> => this.call(`/subscriptions/${encodeURIComponent(id)}`),
+    list: (p: { status?: SubscriptionStatus; customerEmail?: string; cursor?: string; limit?: number } = {}): Promise<SubscriptionList> => {
+      const q = new URLSearchParams();
+      if (p.status) q.set("status", p.status);
+      if (p.customerEmail) q.set("customerEmail", p.customerEmail);
+      if (p.cursor) q.set("cursor", p.cursor);
+      if (p.limit !== undefined) q.set("limit", String(p.limit));
+      return this.call(`/subscriptions${q.size ? `?${q}` : ""}`);
+    },
+    update: (id: string, p: UpdateSubscriptionParams): Promise<Subscription> =>
+      this.call(`/subscriptions/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(p) }),
+    /** Cancel now (default) or at the end of the current period (`atPeriodEnd: true`). */
+    cancel: (id: string, p: { atPeriodEnd?: boolean } = {}): Promise<Subscription> =>
+      this.call(`/subscriptions/${encodeURIComponent(id)}/cancel`, { method: "POST", body: JSON.stringify(p) }),
+    /** Active only: no invoices or reminders until resumed. */
+    pause: (id: string): Promise<Subscription> =>
+      this.call(`/subscriptions/${encodeURIComponent(id)}/pause`, { method: "POST", body: "{}" }),
+    /** Paused only: continues the paid period's schedule, or starts a new period now. */
+    resume: (id: string): Promise<Subscription> =>
+      this.call(`/subscriptions/${encodeURIComponent(id)}/resume`, { method: "POST", body: "{}" }),
+    /** The invoices issued for the subscription (up to 100), newest first. */
+    invoices: async (id: string): Promise<Invoice[]> =>
+      (await this.call<{ invoices: Invoice[] }>(`/subscriptions/${encodeURIComponent(id)}/invoices`)).invoices,
+  };
+
+  /**
    * Deposit addresses (beta, API key): your user sends `srcToken` to an address and receives
    * `dstToken` on `dstChain`, without connecting a wallet. Each deposit becomes an order with
    * `depositAddressId` (and the usual `order.*` webhooks). `simulate` works with test keys only.
@@ -759,6 +966,43 @@ export class LayerHop {
     /** Test mode only: record a deposit of `amount` (ends in 4001 → refunded, 4002 → failed). */
     simulate: async (id: string, p: { amount: string }): Promise<DepositOrder> =>
       (await this.call<{ order: DepositOrder }>(`/deposit-addresses/${encodeURIComponent(id)}/simulate`, { method: "POST", body: JSON.stringify(p) })).order,
+  };
+
+  /**
+   * Solana limit orders (beta, Jupiter Trigger). `create` returns an unsigned tx: have `wallet` sign it
+   * (sign only, `tx.submitViaApi`), then `submit` it. `cancel` returns the cancel tx to sign and
+   * `submit` the same way. An API key is optional; `simulate` works with test keys only.
+   */
+  readonly limitOrders = {
+    /** `integrator` / `integratorFeeBps` default to the client options and `channel` to the client channel. */
+    create: (p: CreateLimitOrderParams): Promise<LimitOrderCreated> =>
+      this.call("/limit-orders", {
+        method: "POST",
+        body: JSON.stringify({
+          channel: this.opts.channel ?? "api", integrator: this.opts.integrator, integratorFeeBps: this.opts.integratorFeeBps,
+          ...p, ...(p.chain !== undefined ? { chain: String(p.chain) } : {}),
+        }),
+      }),
+    /** Send the wallet-signed create or cancel tx (base64). Returns the order and the tx signature. */
+    submit: (id: string, signedTransaction: string): Promise<{ limitOrder: LimitOrder; txHash: string }> =>
+      this.call(`/limit-orders/${encodeURIComponent(id)}/submit`, { method: "POST", body: JSON.stringify({ signedTransaction }) }),
+    /** The order and its fills. */
+    get: (id: string): Promise<LimitOrderWithFills> => this.call(`/limit-orders/${encodeURIComponent(id)}`),
+    /** Orders of `wallet`, or without it your API key's account. */
+    list: (p: { wallet?: string; status?: LimitOrderStatus; cursor?: string; limit?: number } = {}): Promise<LimitOrderList> => {
+      const q = new URLSearchParams();
+      if (p.wallet) q.set("wallet", p.wallet);
+      if (p.status) q.set("status", p.status);
+      if (p.cursor) q.set("cursor", p.cursor);
+      if (p.limit !== undefined) q.set("limit", String(p.limit));
+      return this.call(`/limit-orders${q.size ? `?${q}` : ""}`);
+    },
+    /** An open order: the cancel tx to sign and `submit`. A never-submitted order is cancelled at once (`tx: null`). */
+    cancel: (id: string): Promise<{ limitOrder: LimitOrder; tx: SvmTx | null }> =>
+      this.call(`/limit-orders/${encodeURIComponent(id)}/cancel`, { method: "POST", body: "{}" }),
+    /** Test mode only: fill, half-fill or expire an open order (applied by the worker within seconds). */
+    simulate: (id: string, outcome: "fill" | "partial_fill" | "expire"): Promise<LimitOrder> =>
+      this.call(`/limit-orders/${encodeURIComponent(id)}/simulate`, { method: "POST", body: JSON.stringify({ outcome }) }),
   };
 
   /**

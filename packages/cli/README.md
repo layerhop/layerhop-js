@@ -29,6 +29,9 @@ layerhop link 100 USDC base SOL solana --ref x    # https://layerhop.com/swap?..
 layerhop link 100 USDC arbitrum USDC base --embed --theme light --lock-dst
 layerhop init next my-app                         # or: layerhop init node my-script
 layerhop devnet                                   # local API with the mock provider (monorepo)
+layerhop deposit-address create USDC base USDC arbitrum --recipient 0x… --refund-to 0x…
+layerhop deposit-address list --status active     # also: get / refresh / disable <da_…>
+layerhop deposit-address simulate da_… 25         # test key only: record a fake deposit
 ```
 
 - `quote` takes the amount in **human units** (`100` = 100 USDC) and converts it to base units from
@@ -40,6 +43,12 @@ layerhop devnet                                   # local API with the mock prov
   pass `--theme`, `--accent`, `--radius`, `--lock-src`, `--lock-dst` and `--hide-history`.
 - `init [node|next] <dir>` writes a minimal project that uses `@layerhop/sdk`. It refuses a
   non-empty directory unless you pass `--force`.
+- `deposit-address` (API key required) manages [deposit addresses](https://docs.layerhop.com/guides/deposit-addresses):
+  `create <token> <chain> <toToken> <toChain> --recipient --refund-to` (plus `--amount`, `--one-time`,
+  `--label`, `--metadata k=v,…`, `--base-units`), `list` (`--status`, `--label`, `--limit`, `--cursor`),
+  `get <id>` (with recent deposits), `refresh <id>`, `disable <id>` and `simulate <id> <amount>` (test
+  keys only). Send only the source token on the source chain, at least $1 worth, and never use an
+  exchange deposit address as `--refund-to`.
 - `devnet`, run inside the LayerHop monorepo, starts `@layerhop/api` with
   `LAYERHOP_ENABLE_MOCK=1 PROVIDERS=mock`. Point clients at it with
   `LAYERHOP_API_URL=http://localhost:8787`. Mock transactions are dummies: never broadcast them.

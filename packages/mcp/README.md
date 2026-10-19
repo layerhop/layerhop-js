@@ -20,9 +20,9 @@ claude mcp add --transport http layerhop https://mcp.layerhop.com/mcp
 npx -y @layerhop/mcp --http --port 8090 --host 0.0.0.0
 ```
 
-Env: `LAYERHOP_API_URL` (default `https://api.layerhop.com`), `LAYERHOP_API_KEY` (optional), `LAYERHOP_INTEGRATOR` (optional partner id), `LAYERHOP_APP_URL` (default `https://layerhop.com`).
+Env: `LAYERHOP_API_URL` (default `https://api.layerhop.com`), `LAYERHOP_API_KEY` (optional; required for deposit addresses), `LAYERHOP_INTEGRATOR` (optional partner id), `LAYERHOP_APP_URL` (default `https://layerhop.com`).
 
-Tools: `list_chains`, `list_tokens`, `get_quote`, `get_swap_link`, `build_transaction`, `simulate_transaction`, `report_submitted`, `get_order_status`, `list_orders`. Amounts in tool inputs are human decimals (`"100"` = 100 USDC).
+Tools: `list_chains`, `list_tokens`, `get_quote`, `get_swap_link`, `build_transaction`, `simulate_transaction`, `report_submitted`, `get_order_status`, `list_orders`, plus deposit addresses (API key required): `create_deposit_address`, `list_deposit_addresses`, `get_deposit_address`, `refresh_deposit_address`, `disable_deposit_address`, `simulate_deposit` (test keys only). Amounts in tool inputs are human decimals (`"100"` = 100 USDC).
 
 Full guide: https://docs.layerhop.com/guides/ai-agents
 

@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { CHAINS, LayerHop, LayerHopApiError, TOKENS, findToken, getChain, type OrderStatus, type ProviderId, type QuoteResponse, type WebhookEventPayload, type WebhookEventType } from "@layerhop/sdk";
+import { CHAINS, LayerHop, LayerHopApiError, TOKENS, findToken, getChain, type DepositAddress, type OrderStatus, type ProviderId, type QuoteResponse, type WebhookEventPayload, type WebhookEventType } from "@layerhop/sdk";
 import { signWebhookPayload } from "@layerhop/shared";
 import { formatSeconds, formatUnits, json, parseUnits, table } from "./format.js";
 import { buildSwapLink } from "./link.js";
@@ -39,6 +39,11 @@ Commands:
   listen --forward-to <url>                   Forward your account's webhook events to a local URL, signed
                                               (uses the API key's mode: test or live)
   trigger <event-type>                        Send a sample test-mode event, e.g. order.filled (test key)
+  deposit-address <create|list|get|refresh|disable|simulate>
+                                              Deposit addresses (API key): users swap by sending tokens
+    create <token> <chain> <toToken> <toChain> --recipient <addr> --refund-to <addr>
+    list [--status active|disabled] [--label <l>]   get <id>   refresh <id>   disable <id>
+    simulate <id> <amount>                    Record a fake deposit (test key only)
   init [node|next] <dir>                      Scaffold a minimal project using @layerhop/sdk
   devnet                                      Run the local API with the mock provider (monorepo only)
 
@@ -54,6 +59,9 @@ Link options:   --recipient --slippage-bps <n> --ref <ref> --integrator <id>
                 --embed --theme dark|light --accent <hex> --radius <px> --lock-src --lock-dst --hide-history
 Status options: --watch --interval <seconds>
 Init options:   --force (write into a non-empty directory)
+Deposit address options: --recipient --refund-to --amount <n> --one-time --base-units --label <l>
+                --metadata k=v,k=v --integrator <id> (create); --status --label --limit --cursor (list);
+                --base-units (simulate)
 Listen options: --forward-to <url> --events <type,type> --secret <whsec_…> (env LAYERHOP_WEBHOOK_SECRET;
                 default: a new secret per session, printed at start)
 
@@ -85,6 +93,14 @@ const OPTIONS = {
   events: { type: "string" },
   secret: { type: "string" },
   "max-events": { type: "string" },
+  "refund-to": { type: "string" },
+  amount: { type: "string" },
+  "one-time": { type: "boolean" },
+  label: { type: "string" },
+  metadata: { type: "string" },
+  status: { type: "string" },
+  limit: { type: "string" },
+  cursor: { type: "string" },
 } as const;
 
 export type ParsedArgs = ReturnType<typeof parse>;
@@ -351,6 +367,7 @@ function defaultSpawn(cmd: string, args: string[], opts: { cwd: string; env: Rec
 const EVENT_TYPES: readonly WebhookEventType[] = [
   "order.submitted", "order.filled", "order.refunded", "order.failed",
   "checkout.session.processing", "checkout.session.completed", "checkout.session.payment_failed", "checkout.session.expired",
+  "subscription.created", "subscription.renewed", "subscription.past_due", "subscription.canceled",
 ];
 
 function requireKey(opts: ParsedArgs["opts"], io: Io, what: string): string {
@@ -439,6 +456,206 @@ async function cmdTrigger(p: ParsedArgs, io: Io): Promise<number> {
   return 0;
 }
 
+// ---------- deposit addresses ----------
+
+const DA_USAGE = "deposit-address <create|list|get|refresh|disable|simulate> ...";
+
+function chainLabel(id: number): string {
+  return getChain(id)?.slug ?? String(id);
+}
+
+/** "25 USDC" for listed tokens, else "<base> (base units)". */
+function tokenAmount(chainId: number, token: string, base: string | null): string {
+  if (base === null) return "-";
+  const t = findToken(chainId, token);
+  return t ? `${formatUnits(base, t.decimals)} ${t.symbol}` : `${base} (base units)`;
+}
+
+function tokenLabel(chainId: number, token: string): string {
+  return findToken(chainId, token)?.symbol ?? token;
+}
+
+function routeLabel(da: DepositAddress): string {
+  return `${tokenLabel(da.chainId, da.token)}@${chainLabel(da.chainId)} -> ${tokenLabel(da.dstChainId, da.dstToken)}@${chainLabel(da.dstChainId)}`;
+}
+
+/** The rules to show next to an address (same wording as the docs). */
+export function depositRules(da: DepositAddress): string[] {
+  const sym = tokenLabel(da.chainId, da.token);
+  const chain = getChain(da.chainId)?.name ?? String(da.chainId);
+  const rules = [
+    `Send ONLY ${sym} on ${chain} to this address. Other tokens, or ${sym} on another chain, may be lost for good.`,
+    "Send at least $1 worth; smaller deposits may never be picked up.",
+    `Refunds go to ${da.refundTo}: an address the user controls, never an exchange (CEX) deposit address.`,
+  ];
+  if (!da.reusable && da.amount) rules.push(`One-time address: send exactly ${tokenAmount(da.chainId, da.token, da.amount)}, once.`);
+  if (!da.livemode) rules.unshift("TEST MODE: fake sandbox address. Never send real funds; use `layerhop deposit-address simulate`.");
+  if (da.status === "disabled") rules.unshift("DISABLED: stop showing this address; deposits to it are no longer tracked.");
+  return rules;
+}
+
+function printDepositAddress(io: Io, da: DepositAddress): void {
+  const rows: [string, string][] = [
+    ["id", da.id],
+    ["status", `${da.status} (${da.livemode ? "live" : "test"}, ${da.provider})`],
+    ["address", da.address],
+    ["send", `${tokenLabel(da.chainId, da.token)} on ${chainLabel(da.chainId)} (${da.token})`],
+    ["deliver", `${tokenLabel(da.dstChainId, da.dstToken)} on ${chainLabel(da.dstChainId)} to ${da.recipient}`],
+    ["refund to", da.refundTo],
+    ["type", da.reusable ? "reusable, any amount" : `one-time, exactly ${tokenAmount(da.chainId, da.token, da.amount)}`],
+    ["fees", `${da.fees.ourFeeBps + da.fees.integratorFeeBps} bps${da.fees.integrator ? ` (incl. ${da.fees.integratorFeeBps} bps for ${da.fees.integrator})` : ""}`],
+    ["deposits", `${da.depositCount}${da.lastDepositAt ? `, last ${da.lastDepositAt}` : ""}`],
+  ];
+  if (da.label) rows.push(["label", da.label]);
+  const w = Math.max(...rows.map(([k]) => k.length));
+  for (const [k, v] of rows) io.out(`${k.padEnd(w)}  ${v}`);
+}
+
+function parseMetadata(v: string | undefined): Record<string, string> | undefined {
+  if (v === undefined) return undefined;
+  const out: Record<string, string> = {};
+  for (const pair of v.split(",").map((s) => s.trim()).filter(Boolean)) {
+    const i = pair.indexOf("=");
+    if (i <= 0) throw new UsageError(`--metadata takes key=value pairs separated by commas, got "${pair}"`);
+    out[pair.slice(0, i)] = pair.slice(i + 1);
+  }
+  if (Object.keys(out).length > 20) throw new UsageError("--metadata takes at most 20 keys");
+  return out;
+}
+
+/** Human amount -> base units with the built-in token list, or as-is with --base-units. */
+function amountToBase(amount: string, chainId: number, token: string, baseUnits: boolean | undefined, where: string): string {
+  let base: string;
+  if (baseUnits) {
+    if (!/^\d+$/.test(amount)) throw new UsageError("--base-units amount must be an integer string");
+    base = amount;
+  } else {
+    const t = findToken(chainId, token);
+    if (!t) throw new UsageError(`"${token}" is not in the ${where} token list; pass the amount in base units with --base-units`);
+    try {
+      base = parseUnits(amount, t.decimals);
+    } catch (e) {
+      throw new UsageError((e as Error).message);
+    }
+  }
+  if (/^0+$/.test(base)) throw new UsageError("amount must be greater than 0");
+  return base;
+}
+
+function daId(args: string[], sub: string): string {
+  const [id] = need(args, 1, `deposit-address ${sub} <id>`);
+  if (!id!.startsWith("da_")) throw new UsageError(`"${id}" is not a deposit address id (they start with da_)`);
+  return id!;
+}
+
+async function cmdDepositAddress(p: ParsedArgs, io: Io): Promise<number> {
+  const [sub, ...args] = need(p.args, 1, DA_USAGE) as [string, ...string[]];
+  if (!["create", "list", "get", "refresh", "disable", "simulate"].includes(sub)) throw new UsageError(`Unknown subcommand "${sub}". Usage: layerhop ${DA_USAGE}`);
+  const key = requireKey(p.opts, io, "deposit-address");
+  const lh = client(p.opts, io);
+  const o = p.opts;
+
+  if (sub === "create") {
+    const [token, chain, toToken, toChain] = need(args, 4, "deposit-address create <token> <chain> <toToken> <toChain> --recipient <addr> --refund-to <addr>") as [string, string, string, string];
+    if (!o.recipient || !o["refund-to"]) throw new UsageError("deposit-address create needs --recipient and --refund-to (your user's own address on the source chain, never an exchange deposit address)");
+    const src = resolveChain(chain);
+    const dst = resolveChain(toChain);
+    if (o["one-time"] && o.amount === undefined) throw new UsageError("--one-time needs --amount (the exact amount to send)");
+    const amount = o.amount === undefined ? undefined : amountToBase(o.amount, src.id, token, o["base-units"], src.slug);
+    const metadata = parseMetadata(o.metadata);
+    const da = await lh.depositAddresses.create({
+      srcChain: src.slug, srcToken: token, dstChain: dst.slug, dstToken: toToken, recipient: o.recipient, refundTo: o["refund-to"],
+      ...(o["one-time"] ? { reusable: false } : {}),
+      ...(amount ? { amount } : {}),
+      ...(o.label ? { label: o.label } : {}),
+      ...(metadata ? { metadata } : {}),
+    });
+    if (o.json) {
+      io.out(json(da));
+      return 0;
+    }
+    printDepositAddress(io, da);
+    const e = da.estimate;
+    io.out(`\nEstimate: ${tokenAmount(da.chainId, da.token, e.amount)} -> ~${tokenAmount(da.dstChainId, da.dstToken, e.dstAmount)} (min ${tokenAmount(da.dstChainId, da.dstToken, e.dstAmountMin)}) in ~${formatSeconds(e.estimatedSeconds)}. Each deposit is priced when it arrives.`);
+    io.out("\nTell your user:");
+    for (const r of depositRules(da)) io.out(`  - ${r}`);
+    return 0;
+  }
+
+  if (sub === "list") {
+    const status = o.status;
+    if (status !== undefined && status !== "active" && status !== "disabled") throw new UsageError("--status must be active or disabled");
+    const r = await lh.depositAddresses.list({ status, label: o.label, cursor: o.cursor, limit: int(o.limit, "limit") });
+    if (o.json) {
+      io.out(json(r));
+      return 0;
+    }
+    if (!r.depositAddresses.length) io.out("No deposit addresses.");
+    else {
+      io.out(
+        table(
+          ["ID", "STATUS", "MODE", "ADDRESS", "ROUTE", "DEPOSITS", "LABEL"],
+          r.depositAddresses.map((d) => [d.id, d.status, d.livemode ? "live" : "test", d.address, routeLabel(d), String(d.depositCount), d.label ?? ""]),
+        ),
+      );
+    }
+    if (r.nextCursor) io.out(`\nMore: --cursor ${r.nextCursor}`);
+    return 0;
+  }
+
+  if (sub === "get") {
+    const da = await lh.depositAddresses.get(daId(args, "get"));
+    if (o.json) {
+      io.out(json(da));
+      return 0;
+    }
+    printDepositAddress(io, da);
+    io.out("");
+    if (!da.deposits.length) io.out("No deposits yet. If your user just sent funds, run `layerhop deposit-address refresh " + da.id + "`.");
+    else {
+      io.out(
+        table(
+          ["ORDER", "STATUS", "DEPOSITED", "DELIVERED", "SRC TX", "CREATED"],
+          da.deposits.map((d) => [d.quoteId, d.status, tokenAmount(d.srcChainId, d.srcToken, d.amount), tokenAmount(d.dstChainId, d.dstToken, d.dstAmount), d.srcTxHash ?? "-", d.createdAt]),
+        ),
+      );
+    }
+    io.out("\nTell your user:");
+    for (const r of depositRules(da)) io.out(`  - ${r}`);
+    return 0;
+  }
+
+  if (sub === "refresh") {
+    const da = await lh.depositAddresses.refresh(daId(args, "refresh"));
+    io.out(o.json ? json(da) : `Checking ${da.address} (${da.id}) for deposits now. Run \`layerhop deposit-address get ${da.id}\` in ~15-30s.`);
+    return 0;
+  }
+
+  if (sub === "disable") {
+    const da = await lh.depositAddresses.disable(daId(args, "disable"));
+    io.out(o.json ? json(da) : `Disabled ${da.address} (${da.id}). Stop showing it to your user: deposits sent to it are no longer tracked.`);
+    return 0;
+  }
+
+  // simulate
+  const id = daId(args, "simulate");
+  const [, amount] = need(args, 2, "deposit-address simulate <id> <amount> [--base-units]") as [string, string];
+  if (!key.startsWith("lh_test_")) throw new UsageError("deposit-address simulate only works with a test key (lh_test_…); live deposits are real");
+  let base: string;
+  if (o["base-units"]) base = amountToBase(amount, 0, "", true, "");
+  else {
+    const da = await lh.depositAddresses.get(id);
+    base = amountToBase(amount, da.chainId, da.token, false, chainLabel(da.chainId));
+  }
+  const order = await lh.depositAddresses.simulate(id, { amount: base });
+  if (o.json) io.out(json(order));
+  else {
+    const outcome = base.endsWith("4001") ? "refunded" : base.endsWith("4002") ? "failed" : "filled";
+    io.out(`Recorded test deposit ${order.quoteId} (${tokenAmount(order.srcChainId, order.srcToken, order.amount)}, ${order.status}). The sandbox settles it as ${outcome}.`);
+  }
+  return 0;
+}
+
 /** Runs the CLI. Returns the process exit code; never calls process.exit. */
 export async function run(argv: string[], io: Io): Promise<number> {
   try {
@@ -461,6 +678,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
       case "devnet": return await cmdDevnet(p, io);
       case "listen": return await cmdListen(p, io);
       case "trigger": return await cmdTrigger(p, io);
+      case "deposit-address": case "deposit-addresses": return await cmdDepositAddress(p, io);
       default: throw new UsageError(`Unknown command "${p.command}". Run layerhop --help.`);
     }
   } catch (e) {

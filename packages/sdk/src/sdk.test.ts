@@ -44,6 +44,25 @@ describe("sdk", () => {
     expect(new URL(urls[1]!).searchParams.has("integratorFeeBps")).toBe(false);
   });
 
+  it("sends gasOnArrival (true → flag, number → USD) and exposes quote.gasOnArrival", async () => {
+    const urls: string[] = [];
+    const gas = { amount: "832291636081249", token: "0x0000000000000000000000000000000000000000", symbol: "ETH", decimals: 18, usd: 2 };
+    const f = fakeFetch((url) => {
+      urls.push(url);
+      return [200, { best: { quoteId: "q1", gasOnArrival: gas }, quotes: [], errors: [] }];
+    });
+    const lh = new LayerHop({ baseUrl: "http://x", fetch: f });
+    const params = { srcChain: "base", srcToken: "USDC", amount: "20000000", dstChain: "arbitrum", dstToken: "USDC", sender: "a", recipient: "a" };
+    const r = await lh.quote({ ...params, gasOnArrival: true });
+    expect(new URL(urls[0]!).searchParams.get("gasOnArrival")).toBe("true");
+    expect(r.best.gasOnArrival).toEqual(gas);
+    await lh.quote({ ...params, gasOnArrival: 5 });
+    expect(new URL(urls[1]!).searchParams.get("gasOnArrivalUsd")).toBe("5");
+    expect(new URL(urls[1]!).searchParams.has("gasOnArrival")).toBe(false);
+    await lh.quote(params);
+    expect(new URL(urls[2]!).searchParams.has("gasOnArrival")).toBe(false);
+  });
+
   it("throws typed errors", async () => {
     const lh = new LayerHop({ baseUrl: "http://x", fetch: fakeFetch(() => [410, { error: { code: "QUOTE_EXPIRED", message: "old", requestId: "r" } }]) });
     await expect(lh.buildTx("q")).rejects.toMatchObject({ code: "QUOTE_EXPIRED", status: 410 });
@@ -164,6 +183,82 @@ describe("sdk", () => {
       "GET http://x/v1/invoices/inv_1/public ",
       "POST http://x/v1/invoices/inv_1/pay {}",
     ]);
+  });
+
+  it("subscriptions: create, get, list, update, cancel, pause, resume and invoices hit the subscription routes", async () => {
+    const seen: string[] = [];
+    const lh = new LayerHop({ baseUrl: "http://x", apiKey: "k", fetch: fakeFetch((url, init) => {
+      seen.push(`${init?.method ?? "GET"} ${url} ${init?.body ?? ""}`);
+      if (url.endsWith("/invoices")) return [200, { invoices: [{ id: "inv_1", subscriptionId: "sub_1" }] }];
+      return [200, { id: "sub_1", object: "subscription", status: "active", subscriptions: [], nextCursor: null }];
+    }) });
+    const sub = await lh.subscriptions.create({
+      customerEmail: "ada@example.com", interval: "month", amount: "49000000", settleChain: "base", settleToken: "USDC", recipient: "0x2", description: "Pro plan",
+    });
+    expect(sub.status).toBe("active");
+    await lh.subscriptions.get("sub_1");
+    await lh.subscriptions.list({ status: "past_due", limit: 5 });
+    await lh.subscriptions.list();
+    await lh.subscriptions.update("sub_1", { amount: "59000000", cancelAtPeriodEnd: false });
+    await lh.subscriptions.cancel("sub_1", { atPeriodEnd: true });
+    await lh.subscriptions.cancel("sub/1");
+    await lh.subscriptions.pause("sub_1");
+    await lh.subscriptions.resume("sub_1");
+    const invoices = await lh.subscriptions.invoices("sub_1");
+    expect(invoices[0]!.subscriptionId).toBe("sub_1");
+    expect(seen).toEqual([
+      'POST http://x/v1/subscriptions {"customerEmail":"ada@example.com","interval":"month","amount":"49000000","settleChain":"base","settleToken":"USDC","recipient":"0x2","description":"Pro plan"}',
+      "GET http://x/v1/subscriptions/sub_1 ",
+      "GET http://x/v1/subscriptions?status=past_due&limit=5 ",
+      "GET http://x/v1/subscriptions ",
+      'PATCH http://x/v1/subscriptions/sub_1 {"amount":"59000000","cancelAtPeriodEnd":false}',
+      'POST http://x/v1/subscriptions/sub_1/cancel {"atPeriodEnd":true}',
+      "POST http://x/v1/subscriptions/sub%2F1/cancel {}",
+      "POST http://x/v1/subscriptions/sub_1/pause {}",
+      "POST http://x/v1/subscriptions/sub_1/resume {}",
+      "GET http://x/v1/subscriptions/sub_1/invoices ",
+    ]);
+  });
+
+  it("limitOrders: create, submit, get, list, cancel and simulate hit the limit-order routes", async () => {
+    const seen: string[] = [];
+    const lh = new LayerHop({ baseUrl: "http://x", channel: "web", fetch: fakeFetch((url, init) => {
+      seen.push(`${init?.method ?? "GET"} ${url} ${init?.body ?? ""}`);
+      if (url.endsWith("/limit-orders") && init?.method === "POST") {
+        return [201, { id: "lo_1", object: "limit_order", status: "built", fees: { ourFeeBps: 30, integratorFeeBps: 0, integrator: null }, tx: { vm: "svm", serializedTx: "AQ==", submitViaApi: true } }];
+      }
+      if (url.endsWith("/submit")) return [200, { limitOrder: { id: "lo_1", status: "open" }, txHash: "sig1" }];
+      if (url.endsWith("/cancel")) return [200, { limitOrder: { id: "lo_1", status: "open" }, tx: { vm: "svm", serializedTx: "Ag==", submitViaApi: true } }];
+      if (url.includes("lo_missing")) return [404, { error: { code: "NOT_FOUND", message: "Limit order not found" } }];
+      return [200, { id: "lo_1", object: "limit_order", status: "open", fills: [], limitOrders: [], nextCursor: null }];
+    }) });
+    const lo = await lh.limitOrders.create({ wallet: "W1", srcToken: "SOL", dstToken: "USDC", amount: "1000000000", dstAmount: "250000000", expiresAt: 1792540800 });
+    expect(lo.tx).toMatchObject({ vm: "svm", submitViaApi: true });
+    expect((await lh.limitOrders.submit("lo_1", "c2ln")).txHash).toBe("sig1");
+    await lh.limitOrders.get("lo_1");
+    await lh.limitOrders.list({ wallet: "W1", status: "open", limit: 5 });
+    await lh.limitOrders.list();
+    expect((await lh.limitOrders.cancel("lo_1")).tx?.serializedTx).toBe("Ag==");
+    await lh.limitOrders.simulate("lo/1", "partial_fill");
+    await expect(lh.limitOrders.get("lo_missing")).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
+    expect(seen).toEqual([
+      'POST http://x/v1/limit-orders {"channel":"web","wallet":"W1","srcToken":"SOL","dstToken":"USDC","amount":"1000000000","dstAmount":"250000000","expiresAt":1792540800}',
+      'POST http://x/v1/limit-orders/lo_1/submit {"signedTransaction":"c2ln"}',
+      "GET http://x/v1/limit-orders/lo_1 ",
+      "GET http://x/v1/limit-orders?wallet=W1&status=open&limit=5 ",
+      "GET http://x/v1/limit-orders ",
+      "POST http://x/v1/limit-orders/lo_1/cancel {}",
+      'POST http://x/v1/limit-orders/lo%2F1/simulate {"outcome":"partial_fill"}',
+      "GET http://x/v1/limit-orders/lo_missing ",
+    ]);
+    // partner options flow into create; chain is sent as a string
+    const bodies: string[] = [];
+    const partner = new LayerHop({ baseUrl: "http://x", apiKey: "k", integrator: "myapp", integratorFeeBps: 15, fetch: fakeFetch((_u, init) => {
+      bodies.push(String(init?.body));
+      return [201, { id: "lo_2" }];
+    }) });
+    await partner.limitOrders.create({ wallet: "W", srcToken: "USDC", dstToken: "SOL", amount: "10", dstAmount: "1", chain: 7565164 });
+    expect(JSON.parse(bodies[0]!)).toEqual({ channel: "api", integrator: "myapp", integratorFeeBps: 15, wallet: "W", srcToken: "USDC", dstToken: "SOL", amount: "10", dstAmount: "1", chain: "7565164" });
   });
 
   it("depositAddresses: create, get, list, refresh, disable and simulate hit the deposit-address routes", async () => {

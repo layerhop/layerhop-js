@@ -29,18 +29,18 @@ describe("buildEmbedUrl: customization options", () => {
         headerTitle: "  Deposit  to   Acme ", hideHeader: true, logo: "https://acme.xyz/logo.svg", buttonLabel: "Deposit", showUsd: false, border: false,
         fromChains: ["base", 42161], toChains: ["SOLANA"], excludeChains: ["bsc"], fromTokens: ["base:USDC", "USDT"], toTokens: ["solana:So11111111111111111111111111111111111111112"],
         recipient: "0x1111111111111111111111111111111111111111", lockAmount: true, lockRecipient: true, hideRoutes: true, hideSettings: true,
-        integrator: "acme", hidePoweredBy: true, locale: "en", allowParentOrigin: "https://acme.xyz/",
+        integrator: "acme", hidePoweredBy: true, gasOnArrival: true, locale: "en", allowParentOrigin: "https://acme.xyz/",
       }),
     ).toEqual({
       title: "Deposit to Acme", hideHeader: "1", logo: "https://acme.xyz/logo.svg", buttonLabel: "Deposit", showUsd: "0", border: "0",
       fromChains: "base,42161", toChains: "solana", excludeChains: "bsc", fromTokens: "base:USDC,USDT", toTokens: "solana:So11111111111111111111111111111111111111112",
       recipient: "0x1111111111111111111111111111111111111111", lockAmount: "1", lockRecipient: "1", hideRoutes: "1", hideSettings: "1",
-      integrator: "acme", hidePoweredBy: "1", locale: "en", allowParentOrigin: "https://acme.xyz",
+      integrator: "acme", hidePoweredBy: "1", gasOnArrival: "1", locale: "en", allowParentOrigin: "https://acme.xyz",
     });
   });
 
   it("omits defaults: showUsd true, fontScale 1, false flags", () => {
-    expect(q({ showUsd: true, fontScale: 1, hideRoutes: false, lockAmount: false })).toEqual({});
+    expect(q({ showUsd: true, fontScale: 1, hideRoutes: false, lockAmount: false, gasOnArrival: false })).toEqual({});
     expect(q({ border: true })).toEqual({ border: "1" });
   });
 
@@ -201,14 +201,14 @@ describe("auto-init data attributes", () => {
       data-border-color="333333" data-radius-inner="6" data-font="dm-sans" data-font-scale="0.95" data-density="compact" data-width="400"
       data-shadow="none" data-header-title="Bridge" data-hide-header data-logo="https://acme.xyz/l.png" data-button-label="Go" data-show-usd="0"
       data-from-chains="base, arbitrum" data-to-tokens="solana:USDC,USDT" data-exclude-chains="bsc" data-lock-amount data-hide-routes
-      data-hide-settings data-integrator="acme" data-hide-powered-by data-locale="en" data-live-updates></div>`;
+      data-hide-settings data-integrator="acme" data-hide-powered-by data-gas-on-arrival data-locale="en" data-live-updates></div>`;
     const el = document.querySelector<HTMLElement>("[data-layerhop-widget]")!;
     const o = optionsFromDataset(el);
     expect(o).toMatchObject({
       preset: "lime", theme: "auto", accentText: "000", surfaceAlt: "1f2937", borderColor: "333333", radiusInner: 6, font: "dm-sans", fontScale: 0.95,
       density: "compact", width: 400, shadow: "none", headerTitle: "Bridge", hideHeader: true, logo: "https://acme.xyz/l.png", buttonLabel: "Go", showUsd: false,
       fromChains: ["base", "arbitrum"], toTokens: ["solana:USDC", "USDT"], excludeChains: ["bsc"], lockAmount: true, hideRoutes: true, hideSettings: true,
-      integrator: "acme", hidePoweredBy: true, locale: "en", liveUpdates: true,
+      integrator: "acme", hidePoweredBy: true, gasOnArrival: true, locale: "en", liveUpdates: true,
     });
     autoInit();
     const src = new URL(getWidget(el)!.iframe.src).searchParams;

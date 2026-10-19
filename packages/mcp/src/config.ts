@@ -1,7 +1,7 @@
 export interface McpConfig {
   /** LayerHop API base URL. Env LAYERHOP_API_URL, default https://api.layerhop.com. */
   apiUrl: string;
-  /** Optional API key (`lh_live_…`). Env LAYERHOP_API_KEY. */
+  /** Optional API key (`lh_live_…` / `lh_test_…`); required by the deposit-address tools. Env LAYERHOP_API_KEY. */
   apiKey?: string;
   /** Optional partner id for partner fees. Env LAYERHOP_INTEGRATOR. */
   integrator?: string;
