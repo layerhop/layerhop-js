@@ -1,6 +1,6 @@
 {
   "name": "@layerhop/cli",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "LayerHop command line: quotes, order status, deep links, project scaffolding and a local mock devnet",
   "license": "MIT",
   "author": "LayerHop (https://layerhop.com)",

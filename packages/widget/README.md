@@ -84,7 +84,7 @@ buildEmbedUrl({ srcChain: "base", lockSrc: true }); // https://layerhop.com/embe
 ```html
 <div data-layerhop-widget data-src-chain="base" data-dst-chain="solana" data-theme="dark"></div>
 <!-- once @layerhop/widget is published to npm -->
-<script src="https://unpkg.com/@layerhop/widget@0.5.0/dist/embed.js"></script>
+<script src="https://unpkg.com/@layerhop/widget@0.6.0/dist/embed.js"></script>
 <script>
   document.querySelector("[data-layerhop-widget]")
     .addEventListener("layerhop:quote", (e) => console.log(e.detail));
