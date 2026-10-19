@@ -1,6 +1,6 @@
 {
   "name": "@layerhop/react",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "React hooks for LayerHop cross-chain swaps: quotes, transactions, order tracking and a wallet-agnostic useSwap state machine",
   "license": "MIT",
   "author": "LayerHop (https://layerhop.com)",

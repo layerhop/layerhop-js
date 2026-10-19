@@ -11,9 +11,9 @@ export const WEBHOOK_SIGNATURE_HEADER = "LayerHop-Signature";
 export const WEBHOOK_EVENT_HEADER = "LayerHop-Event";
 export const WEBHOOK_DELIVERY_HEADER = "LayerHop-Delivery";
 
-const enc = new TextEncoder();
-
 async function hmacHex(secret: string, message: string): Promise<string> {
+  // Created per call, not at import: importing the SDK must work where TextEncoder is missing.
+  const enc = new TextEncoder();
   const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(message)));
   return Array.from(sig, (b) => b.toString(16).padStart(2, "0")).join("");

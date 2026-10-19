@@ -5,7 +5,7 @@
 Typed TypeScript client for the [LayerHop API](https://docs.layerhop.com): best-price cross-chain and
 same-chain swaps across EVM chains and Solana through one non-custodial API.
 
-- **Zero runtime dependencies.** Uses the global `fetch`; works in Node 18+, browsers, Deno, Bun and edge runtimes.
+- **Zero runtime dependencies.** Uses the global `fetch`; works in Node 18+, browsers, Deno, Bun, edge runtimes and React Native.
 - **ESM + CommonJS** builds with bundled type definitions.
 - **Never holds keys.** It fetches quotes and builds *unsigned* transactions; your wallet signs.
 
@@ -117,7 +117,8 @@ await lh.depositAddresses.simulate(da.id, { amount: "25000000" });       // test
 ```
 
 Options for `new LayerHop(options)`: `baseUrl` (default `https://api.layerhop.com`), `apiKey`,
-`channel`, `integrator`, `integratorFeeBps`, `fetch`.
+`channel`, `integrator`, `integratorFeeBps`, `fetch`, `streaming` (`"auto"` | `"fetch"` | `"xhr"`: how
+Server-Sent Events streams are read; `auto` falls back to `XMLHttpRequest` where `fetch` can't stream, as in React Native).
 
 The package also exports the chain and token registry (`CHAINS`, `getChain`, `TOKENS`, `findToken`,
 `SOLANA_CHAIN_ID`, `EVM_NATIVE`, `SOL_NATIVE`) and all request/response types.

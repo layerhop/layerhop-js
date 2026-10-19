@@ -11,7 +11,7 @@ export interface McpConfig {
   docsUrl: string;
 }
 
-export const VERSION = "0.6.0";
+export const VERSION = "0.7.0";
 
 export function configFromEnv(env: NodeJS.ProcessEnv = process.env): McpConfig {
   const clean = (v: string | undefined) => (v && v.trim() ? v.trim() : undefined);

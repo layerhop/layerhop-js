@@ -17,10 +17,8 @@ There are three ways to use it:
 
 ## Install
 
-> The npm package is publishing soon. Until then, use it from the LayerHop monorepo (`packages/widget`) or embed the iframe directly: `https://layerhop.com/embed`.
-
 ```bash
-npm install @layerhop/widget   # once published
+npm install @layerhop/widget
 # React is an optional peer dependency (>=18), needed only for @layerhop/widget/react
 ```
 
@@ -84,7 +82,7 @@ buildEmbedUrl({ srcChain: "base", lockSrc: true }); // https://layerhop.com/embe
 ```html
 <div data-layerhop-widget data-src-chain="base" data-dst-chain="solana" data-theme="dark"></div>
 <!-- once @layerhop/widget is published to npm -->
-<script src="https://unpkg.com/@layerhop/widget@0.6.0/dist/embed.js"></script>
+<script src="https://unpkg.com/@layerhop/widget@0.7.0/dist/embed.js"></script>
 <script>
   document.querySelector("[data-layerhop-widget]")
     .addEventListener("layerhop:quote", (e) => console.log(e.detail));

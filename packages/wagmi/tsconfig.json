@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "baseUrl": ".",
+    // Typecheck against @layerhop/react's sources so no build is needed first (same layout in layerhop-js).
+    "paths": { "@layerhop/react": ["../react/src/index.ts"] }
+  },
+  "include": ["src", "test", "example", "tsup.config.ts", "vitest.config.ts"]
+}

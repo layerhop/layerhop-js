@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, type CSSProperties } from "react";
 import { mountCheckout, openCheckout, type CheckoutHandle, type CheckoutOptions, type MountCheckoutOptions } from "./checkout";
 import { WIDGET_OPTION_KEYS, buildEmbedUrl, mount, type MountOptions, type WidgetHandle, type WidgetOptions } from "./core";
 
-export type * from "./core";
-export type * from "./checkout";
+// Re-export the whole core API (values too): the bundled .d.ts of a type-only `export type *`
+// lists values the JS did not contain (0.6.0 bug), so keep the runtime exports and the types in step.
+export * from "./core";
+export * from "./checkout";
 
 export interface LayerHopWidgetProps extends MountOptions {
   /** Class name for the wrapping <div>. */

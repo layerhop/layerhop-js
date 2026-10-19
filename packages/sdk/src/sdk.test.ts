@@ -63,6 +63,24 @@ describe("sdk", () => {
     expect(new URL(urls[2]!).searchParams.has("gasOnArrival")).toBe(false);
   });
 
+  it("sends destination calls as POST /quote with dstAmount and exposes srcAmount + calls", async () => {
+    const seen: { url: string; method?: string; body?: Record<string, unknown> }[] = [];
+    const plan = { items: [{ to: "0xt", data: "0x01", value: "0" }], executor: "0xe", executed: true, simulation: { ok: true, gasUsed: "1" } };
+    const f = fakeFetch((url, init) => {
+      seen.push({ url, method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      return [200, { best: { quoteId: "q1", srcAmount: "10083608", calls: plan }, quotes: [], errors: [] }];
+    });
+    const lh = new LayerHop({ baseUrl: "http://x", integrator: "myapp", fetch: f });
+    const base = { srcChain: "base", srcToken: "USDC", dstChain: "arbitrum", dstToken: "USDC", dstAmount: "10000000", sender: "0xs", recipient: "0xr" };
+    const r = await lh.quote({ ...base, action: { type: "aave-v3-supply" } });
+    expect(seen[0]).toMatchObject({ url: "http://x/v1/quote", method: "POST", body: { ...base, action: { type: "aave-v3-supply" }, integrator: "myapp", slippageBps: 50, channel: "api" } });
+    expect(seen[0]!.body).not.toHaveProperty("amount");
+    expect(r.best.srcAmount).toBe("10083608");
+    expect(r.best.calls).toEqual(plan);
+    await lh.quote({ ...base, calls: [{ to: "0xt", data: "0x01" }] });
+    expect(seen[1]!.body!.calls).toEqual([{ to: "0xt", data: "0x01" }]);
+  });
+
   it("throws typed errors", async () => {
     const lh = new LayerHop({ baseUrl: "http://x", fetch: fakeFetch(() => [410, { error: { code: "QUOTE_EXPIRED", message: "old", requestId: "r" } }]) });
     await expect(lh.buildTx("q")).rejects.toMatchObject({ code: "QUOTE_EXPIRED", status: 410 });
@@ -424,5 +442,24 @@ describe("sdk assets", () => {
     expect(urls[0]!.searchParams.has("chains")).toBe(false);
     await lh.balances("0xabc", ["base", 80094]);
     expect(urls[1]!.searchParams.get("chains")).toBe("base,80094");
+  });
+});
+
+describe("webhooks", () => {
+  it("verifyWebhookSignature and constructWebhookEvent accept a valid signature and reject tampering", async () => {
+    const { signWebhookPayload } = await import("@layerhop/shared");
+    const { verifyWebhookSignature, constructWebhookEvent, WebhookSignatureError, WEBHOOK_SIGNATURE_HEADER } = await import("./index.js");
+    const secret = "whsec_test";
+    const body = JSON.stringify({ id: "evt_1", type: "order.filled", createdAt: "2026-10-19T10:00:00.000Z", data: { order: { quoteId: "q_1" } } });
+    const header = await signWebhookPayload(secret, body);
+    expect(WEBHOOK_SIGNATURE_HEADER).toBe("LayerHop-Signature");
+    expect(await verifyWebhookSignature(secret, header, body)).toBe(true);
+    expect(await verifyWebhookSignature(secret, header, body.replace("q_1", "q_2"))).toBe(false);
+    expect(await verifyWebhookSignature("other", header, body)).toBe(false);
+    const evt = await constructWebhookEvent(secret, header, body);
+    expect(evt.type).toBe("order.filled");
+    await expect(constructWebhookEvent(secret, undefined, body)).rejects.toBeInstanceOf(WebhookSignatureError);
+    const old = await signWebhookPayload(secret, body, Math.floor(Date.now() / 1000) - 3600);
+    await expect(constructWebhookEvent(secret, old, body)).rejects.toThrow("Invalid LayerHop webhook signature");
   });
 });

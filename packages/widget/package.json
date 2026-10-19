@@ -1,6 +1,6 @@
 {
   "name": "@layerhop/widget",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Embed the LayerHop cross-chain swap widget and checkout in any site: React components, framework-agnostic mount()/openCheckout() and drop-in <script> tags",
   "license": "MIT",
   "author": "LayerHop (https://layerhop.com)",

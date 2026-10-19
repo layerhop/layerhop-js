@@ -5,6 +5,8 @@ import { defineConfig } from "tsup";
 export default defineConfig({
   entry: { index: "src/index.ts", cli: "src/cli.ts" },
   format: ["esm"],
+  // tsconfig.build.json maps @layerhop/ai/core to its sources so the .d.ts inlines its types.
+  tsconfig: "tsconfig.build.json",
   dts: { entry: { index: "src/index.ts" } },
   sourcemap: true,
   clean: true,

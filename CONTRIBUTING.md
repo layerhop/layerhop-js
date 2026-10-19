@@ -5,7 +5,7 @@ Thanks for your interest in LayerHop!
 ## Where the code lives
 
 This repository is **exported automatically** from the LayerHop monorepo
-(`packages/{sdk-ts,shared,react,widget,cli,mcp}`), which is the single source of truth. Every sync commit is titled
+(`packages/{sdk-ts,shared,react,react-native,wagmi,solana,widget,cli,mcp,ai,plugin-elizaos,agentkit,goat}`), which is the single source of truth. Every sync commit is titled
 `Sync from layerhop monorepo <sha>` and references the monorepo commit it was built from.
 
 **Pull requests are welcome here.** A maintainer reviews your PR, applies the change upstream in the

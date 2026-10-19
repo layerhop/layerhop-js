@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": ["node"],
+    // Typecheck against the widget sources, so no build of @layerhop/widget is needed first.
+    "paths": { "@layerhop/widget": ["../widget/src/index.ts"] }
+  },
+  "include": ["src", "test", "tsup.config.ts", "vitest.config.ts"]
+}

@@ -1,0 +1,155 @@
+{
+  "name": "@layerhop/ai",
+  "version": "0.7.0",
+  "description": "LayerHop tools for AI agent frameworks: Vercel AI SDK, LangChain, OpenAI (function calling and Agents SDK). Quotes, unsigned swap transactions, deposit addresses, checkout. Holds no keys and never signs.",
+  "license": "MIT",
+  "author": "LayerHop (https://layerhop.com)",
+  "homepage": "https://docs.layerhop.com/guides/agent-frameworks",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./core": "./src/core/index.ts",
+    "./vercel": "./src/vercel.ts",
+    "./langchain": "./src/langchain.ts",
+    "./openai": "./src/openai.ts",
+    "./openai-agents": "./src/openai-agents.ts",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "import": {
+          "types": "./dist/index.d.ts",
+          "default": "./dist/index.js"
+        },
+        "require": {
+          "types": "./dist/index.d.cts",
+          "default": "./dist/index.cjs"
+        }
+      },
+      "./core": {
+        "import": {
+          "types": "./dist/core.d.ts",
+          "default": "./dist/core.js"
+        },
+        "require": {
+          "types": "./dist/core.d.cts",
+          "default": "./dist/core.cjs"
+        }
+      },
+      "./vercel": {
+        "import": {
+          "types": "./dist/vercel.d.ts",
+          "default": "./dist/vercel.js"
+        },
+        "require": {
+          "types": "./dist/vercel.d.cts",
+          "default": "./dist/vercel.cjs"
+        }
+      },
+      "./langchain": {
+        "import": {
+          "types": "./dist/langchain.d.ts",
+          "default": "./dist/langchain.js"
+        },
+        "require": {
+          "types": "./dist/langchain.d.cts",
+          "default": "./dist/langchain.cjs"
+        }
+      },
+      "./openai": {
+        "import": {
+          "types": "./dist/openai.d.ts",
+          "default": "./dist/openai.js"
+        },
+        "require": {
+          "types": "./dist/openai.d.cts",
+          "default": "./dist/openai.cjs"
+        }
+      },
+      "./openai-agents": {
+        "import": {
+          "types": "./dist/openai-agents.d.ts",
+          "default": "./dist/openai-agents.js"
+        },
+        "require": {
+          "types": "./dist/openai-agents.d.cts",
+          "default": "./dist/openai-agents.cjs"
+        }
+      },
+      "./package.json": "./package.json"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "layerhop",
+    "ai",
+    "ai-agents",
+    "agent-tools",
+    "vercel-ai-sdk",
+    "langchain",
+    "openai",
+    "openai-agents",
+    "function-calling",
+    "bridge",
+    "swap",
+    "cross-chain",
+    "solana",
+    "evm",
+    "defi"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@layerhop/sdk": "workspace:^",
+    "zod": "^4.1.8"
+  },
+  "peerDependencies": {
+    "@langchain/core": "^1.0.0",
+    "@openai/agents": ">=0.18.0 <1.0.0",
+    "ai": "^6.0.0 || ^7.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@langchain/core": {
+      "optional": true
+    },
+    "@openai/agents": {
+      "optional": true
+    },
+    "ai": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@langchain/core": "1.2.12",
+    "@layerhop/shared": "workspace:*",
+    "@openai/agents": "0.18.0",
+    "ai": "7.0.127",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.7"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/layerhop/layerhop-js.git",
+    "directory": "packages/ai"
+  },
+  "bugs": {
+    "url": "https://github.com/layerhop/layerhop-js/issues"
+  }
+}

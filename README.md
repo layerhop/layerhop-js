@@ -12,9 +12,16 @@ Docs: <https://docs.layerhop.com>
 |---|---|
 | [`@layerhop/sdk`](packages/sdk) | LayerHop SDK — best-price cross-chain and same-chain swaps |
 | [`@layerhop/react`](packages/react) | React hooks for LayerHop cross-chain swaps: quotes, transactions, order tracking and a wallet-agnostic useSwap state machine |
+| [`@layerhop/react-native`](packages/react-native) | LayerHop for React Native and Expo: the swap widget and checkout as native components (react-native-webview) with typed callbacks, plus wallet deep-link helpers |
+| [`@layerhop/wagmi`](packages/wagmi) | Execute LayerHop quotes with wagmi or viem: ERC-20 approval, swap and extra calls in one EIP-5792 confirmation when the wallet supports it, sequential transactions otherwise |
+| [`@layerhop/solana`](packages/solana) | Execute LayerHop quotes with a Solana wallet: decode the transaction, sign and send it through @solana/wallet-adapter, Wallet Standard or an injected provider, submit-via-API and co-signed modes, then report it |
 | [`@layerhop/widget`](packages/widget) | Embed the LayerHop cross-chain swap widget and checkout in any site: React components, framework-agnostic mount()/openCheckout() and drop-in <script> tags |
 | [`@layerhop/cli`](packages/cli) | LayerHop command line: quotes, order status, deep links, project scaffolding and a local mock devnet |
 | [`@layerhop/mcp`](packages/mcp) | LayerHop MCP server: let AI agents (Claude, ChatGPT, Cursor, ...) quote and prepare cross-chain swaps. Holds no keys and never signs. |
+| [`@layerhop/ai`](packages/ai) | LayerHop tools for AI agent frameworks: Vercel AI SDK, LangChain, OpenAI (function calling and Agents SDK). Quotes, unsigned swap transactions, deposit addresses, checkout. Holds no keys and never signs. |
+| [`@layerhop/plugin-elizaos`](packages/plugin-elizaos) | LayerHop plugin for ElizaOS: best-price cross-chain and same-chain swap quotes, unsigned transactions with an explicit confirmation step, deposit addresses and checkout. Holds no keys and never auto-signs. |
+| [`@layerhop/agentkit`](packages/agentkit) | LayerHop action provider for Coinbase AgentKit: best-price cross-chain and same-chain swaps (EVM and Solana), deposit addresses and checkout for on-chain agents. The wallet provider signs; LayerHop never sees keys. |
+| [`@layerhop/goat`](packages/goat) | LayerHop plugin for the GOAT SDK: best-price cross-chain and same-chain swap quotes, unsigned transactions, deposit addresses and checkout for on-chain agents. LayerHop never sees keys. |
 
 `packages/shared` is an internal, private package (chain registry, tokens, error codes, types). It is
 inlined into each published package at build time, so you never install it.
@@ -66,6 +73,14 @@ import { LayerHopProvider, useQuote } from "@layerhop/react";
 import { mount } from "@layerhop/widget";
 
 mount("#swap", { srcChain: "base", dstChain: "solana", dstToken: "SOL" });
+```
+
+**React Native / Expo** (`npx expo install @layerhop/react-native react-native-webview`)
+
+```tsx
+import { LayerHopWidget } from "@layerhop/react-native";
+
+<LayerHopWidget srcChain="base" dstChain="solana" dstToken="SOL" onSubmitted={(e) => console.log(e.srcTxHash)} />;
 ```
 
 **CLI**

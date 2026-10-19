@@ -1,0 +1,111 @@
+{
+  "name": "@layerhop/plugin-elizaos",
+  "version": "0.7.0",
+  "description": "LayerHop plugin for ElizaOS: best-price cross-chain and same-chain swap quotes, unsigned transactions with an explicit confirmation step, deposit addresses and checkout. Holds no keys and never auto-signs.",
+  "license": "MIT",
+  "author": "LayerHop (https://layerhop.com)",
+  "homepage": "https://docs.layerhop.com/guides/agent-frameworks",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "import": {
+          "types": "./dist/index.d.ts",
+          "default": "./dist/index.js"
+        },
+        "require": {
+          "types": "./dist/index.d.cts",
+          "default": "./dist/index.cjs"
+        }
+      },
+      "./package.json": "./package.json"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "layerhop",
+    "elizaos",
+    "eliza",
+    "elizaos-plugin",
+    "ai-agents",
+    "bridge",
+    "swap",
+    "cross-chain",
+    "solana",
+    "evm",
+    "defi"
+  ],
+  "agentConfig": {
+    "pluginType": "elizaos:plugin:1.0.0",
+    "pluginParameters": {
+      "LAYERHOP_API_KEY": {
+        "type": "string",
+        "description": "Optional LayerHop API key (lh_live_ / lh_test_); required for deposit addresses and checkout.",
+        "required": false,
+        "sensitive": true
+      },
+      "LAYERHOP_INTEGRATOR": {
+        "type": "string",
+        "description": "Your LayerHop partner id, so quotes earn your partner fee.",
+        "required": false
+      },
+      "LAYERHOP_INTEGRATOR_FEE_BPS": {
+        "type": "number",
+        "description": "Partner fee override in bps (honored with your partner API key).",
+        "required": false
+      },
+      "LAYERHOP_SIGNER_SERVICE": {
+        "type": "string",
+        "description": "Name of a runtime service implementing LayerHopSignerService. Unset: the agent never signs and hands out unsigned transactions and swap links.",
+        "required": false
+      },
+      "LAYERHOP_API_URL": {
+        "type": "string",
+        "description": "LayerHop API base URL (default https://api.layerhop.com).",
+        "required": false
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@layerhop/ai": "workspace:^"
+  },
+  "peerDependencies": {
+    "@elizaos/core": "^1.7.0"
+  },
+  "devDependencies": {
+    "@elizaos/core": "1.7.2",
+    "@layerhop/shared": "workspace:*",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.7"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/layerhop/layerhop-js.git",
+    "directory": "packages/plugin-elizaos"
+  },
+  "bugs": {
+    "url": "https://github.com/layerhop/layerhop-js/issues"
+  }
+}

@@ -1,7 +1,7 @@
 {
   "name": "layerhop-js",
   "private": true,
-  "description": "LayerHop JavaScript/TypeScript SDKs: @layerhop/sdk, react, widget, cli and mcp",
+  "description": "LayerHop JavaScript/TypeScript SDKs: @layerhop/sdk, react, react-native, wagmi, solana, widget, cli, mcp and the AI agent framework integrations (ai, plugin-elizaos, agentkit, goat)",
   "license": "MIT",
   "packageManager": "pnpm@9.15.9",
   "engines": {

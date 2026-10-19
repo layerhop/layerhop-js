@@ -1,3 +1,4 @@
+import { verifyWebhookSignature } from "@layerhop/shared";
 import type {
   BalancesResponse, BuiltTx, ChainInfo, FeeBreakdown, FeeChannel, GasOnArrival, OrderStatus, PricesResponse, ProviderId, SvmTx, TokenInfo, TokensResponse,
 } from "@layerhop/shared";
@@ -10,6 +11,7 @@ export {
   CHAINS, TOKENS, getChain, findToken, SOLANA_CHAIN_ID, EVM_NATIVE, SOL_NATIVE, HYPERLIQUID_CHAIN_ID,
   gasOnArrivalApplies, DEFAULT_GAS_ON_ARRIVAL_USD,
   SETTLEMENT_TOKENS, findSettlementToken, SANDBOX_MAGIC_AMOUNTS,
+  verifyWebhookSignature, WEBHOOK_SIGNATURE_HEADER, WEBHOOK_EVENT_HEADER, WEBHOOK_DELIVERY_HEADER,
 } from "@layerhop/shared";
 
 export interface LayerHopOptions {
@@ -28,6 +30,13 @@ export interface LayerHopOptions {
    */
   integratorFeeBps?: number;
   fetch?: typeof fetch;
+  /**
+   * How Server-Sent Events streams (`streamOrder`, `checkout.stream`, `webhooks.stream`) are read.
+   * `auto` (default): `fetch` with a streaming body where the runtime supports it, else
+   * `XMLHttpRequest` progress events (React Native, whose `fetch` can't stream). A custom `fetch`
+   * always uses `fetch`. A `fetch` response without a readable body is parsed once it completes.
+   */
+  streaming?: "auto" | "fetch" | "xhr";
 }
 
 export interface QuoteParams {
@@ -50,6 +59,40 @@ export interface QuoteParams {
   gasOnArrival?: boolean | number;
 }
 
+/**
+ * Destination calls: an exact-output quote whose output is used by contract calls on the destination
+ * chain, run by the provider's executor (msg.sender is the executor, not the user). Send `calls` or
+ * `action`. See the destination-calls guide for the trust model.
+ */
+export interface CallsQuoteParams extends Omit<QuoteParams, "amount" | "gasOnArrival"> {
+  /** The exact amount of `dstToken` the calls receive (base units). The quote reports `srcAmount`. */
+  dstAmount: string;
+  calls?: DestinationCall[];
+  /** A preset that builds the calls server-side, e.g. `{ type: "aave-v3-supply" }`. */
+  action?: DestinationAction;
+}
+
+/** One contract call on the destination chain (`value` in wei, native outputs only). */
+export interface DestinationCall {
+  to: string;
+  data: string;
+  value?: string;
+}
+
+/** `aave-v3-supply`: approve the chain's Aave v3 Pool and supply `dstAmount` of `dstToken` for `recipient`. */
+export interface DestinationAction {
+  type: "aave-v3-supply";
+}
+
+/** The calls a quote's provider committed to run, and their pre-quote simulation. */
+export interface DestinationCallsPlan {
+  items: { to: string; data: string; value: string }[];
+  /** Contract that receives the output and makes the calls (their msg.sender). */
+  executor: string;
+  executed: boolean;
+  simulation?: { ok: boolean; gasUsed: string; leftover?: string };
+}
+
 export interface Quote {
   quoteId: string;
   provider: ProviderId;
@@ -60,6 +103,10 @@ export interface Quote {
   expiresAt: number;
   /** Native gas delivered to the recipient on top of `dstAmount` (when requested and included). */
   gasOnArrival?: GasOnArrival;
+  /** What the sender pays (base units of srcToken), on destination-call quotes. */
+  srcAmount?: string;
+  /** Destination calls the provider will run (when the request had `calls` / `action`). */
+  calls?: DestinationCallsPlan;
 }
 
 export interface QuoteResponse {
@@ -707,6 +754,26 @@ export class LayerHopApiError extends Error {
   }
 }
 
+/** Thrown by `constructWebhookEvent` when the `LayerHop-Signature` header does not verify. */
+export class WebhookSignatureError extends Error {
+  constructor(message = "Invalid LayerHop webhook signature") {
+    super(message);
+    this.name = "WebhookSignatureError";
+  }
+}
+
+/**
+ * Verify a webhook request and parse its event. Pass the RAW request body (not re-serialized JSON)
+ * and the `LayerHop-Signature` header. Throws `WebhookSignatureError` when the signature is
+ * missing, wrong or older than `toleranceSec` (default 300 s).
+ */
+export async function constructWebhookEvent(
+  secret: string, header: string | null | undefined, rawBody: string, toleranceSec = 300,
+): Promise<WebhookEventPayload> {
+  if (!(await verifyWebhookSignature(secret, header, rawBody, toleranceSec))) throw new WebhookSignatureError();
+  return JSON.parse(rawBody) as WebhookEventPayload;
+}
+
 export class LayerHop {
   private readonly baseUrl: string;
   private readonly fetchFn: typeof fetch;
@@ -769,8 +836,23 @@ export class LayerHop {
     return this.call(`/balances?${q}`);
   }
 
-  /** Ask every liquidity provider; `best` is the highest output for the user. */
-  quote(p: QuoteParams): Promise<QuoteResponse> {
+  /**
+   * Ask every liquidity provider; `best` is the highest output for the user. With `dstAmount` and
+   * `calls` / `action` (destination calls) this sends `POST /v1/quote`, and only providers that run
+   * calls answer.
+   */
+  quote(p: QuoteParams | CallsQuoteParams): Promise<QuoteResponse> {
+    if ("dstAmount" in p) {
+      const body: Record<string, unknown> = {
+        srcChain: String(p.srcChain), srcToken: p.srcToken, dstChain: String(p.dstChain), dstToken: p.dstToken,
+        dstAmount: p.dstAmount, sender: p.sender, recipient: p.recipient, slippageBps: p.slippageBps ?? 50, channel: this.opts.channel ?? "api",
+      };
+      if (p.calls) body.calls = p.calls;
+      if (p.action) body.action = p.action;
+      if (this.opts.integrator) body.integrator = this.opts.integrator;
+      if (this.opts.integratorFeeBps !== undefined) body.integratorFeeBps = this.opts.integratorFeeBps;
+      return this.call("/quote", { method: "POST", body: JSON.stringify(body) });
+    }
     const q = new URLSearchParams({
       srcChain: String(p.srcChain), srcToken: p.srcToken, amount: p.amount,
       dstChain: String(p.dstChain), dstToken: p.dstToken, sender: p.sender, recipient: p.recipient,
@@ -1027,35 +1109,45 @@ export class LayerHop {
   private async *stream<T>(path: string, event: string, signal?: AbortSignal): AsyncGenerator<T> {
     const headers: Record<string, string> = { accept: "text/event-stream" };
     if (this.opts.apiKey) headers["x-api-key"] = this.opts.apiKey;
-    const res = await this.fetchFn(`${this.baseUrl}/v1${path}`, { headers, signal });
-    if (!res.ok || !res.body) {
+    const url = `${this.baseUrl}/v1${path}`;
+    if (this.streamTransport() === "xhr") {
+      yield* xhrEventStream<T>(url, headers, event, signal);
+      return;
+    }
+    const res = await this.fetchFn(url, { headers, signal });
+    if (!res.ok) {
       const body = (await res.json().catch(() => ({}))) as { error?: { code: string; message: string; requestId?: string } };
       throw new LayerHopApiError(body.error?.code ?? "INTERNAL", body.error?.message ?? res.statusText, res.status, body.error?.requestId);
     }
+    const parser = new SseParser(event);
+    if (!res.body || typeof res.body.getReader !== "function" || typeof TextDecoder === "undefined") {
+      // A fetch without streaming bodies (e.g. whatwg-fetch): the text arrives when the stream ends.
+      for (const item of parser.push(await res.text())) yield item as T;
+      return;
+    }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    let buf = "";
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) return;
-        buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
-        let i: number;
-        while ((i = buf.indexOf("\n\n")) >= 0) {
-          const frame = buf.slice(0, i);
-          buf = buf.slice(i + 2);
-          let name = "message";
-          const data: string[] = [];
-          for (const line of frame.split("\n")) {
-            if (line.startsWith("event:")) name = line.slice(6).trim();
-            else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
-          }
-          if (name === event && data.length) yield JSON.parse(data.join("\n")) as T;
-        }
+        for (const item of parser.push(decoder.decode(value, { stream: true }))) yield item as T;
       }
     } finally {
       await reader.cancel().catch(() => undefined);
     }
+  }
+
+  /** `fetch` or `xhr` for SSE streams (see `LayerHopOptions.streaming`). */
+  private streamTransport(): "fetch" | "xhr" {
+    const mode = this.opts.streaming ?? "auto";
+    if (mode !== "auto") return mode;
+    if (this.opts.fetch || typeof XMLHttpRequest === "undefined") return "fetch";
+    const nav = (globalThis as { navigator?: { product?: string } }).navigator;
+    if (nav?.product === "ReactNative") return "xhr";
+    const fetchStreams = typeof ReadableStream !== "undefined" && typeof TextDecoder !== "undefined"
+      && typeof Response !== "undefined" && "body" in Response.prototype;
+    return fetchStreams ? "fetch" : "xhr";
   }
 
   /** A provider order's status. */
@@ -1080,6 +1172,119 @@ export class LayerHop {
       }
       if (s.state === "filled" || s.state === "refunded" || s.state === "failed") return;
       await new Promise((r) => setTimeout(r, intervalMs));
+    }
+  }
+}
+
+/** Incremental Server-Sent Events parser: feed text chunks, get the JSON data of `event` frames. */
+class SseParser {
+  private buf = "";
+  constructor(private readonly event: string) {}
+
+  push(chunk: string): unknown[] {
+    let s = this.buf + chunk;
+    // A chunk may end between "\r" and "\n"; keep the "\r" until the next chunk decides.
+    const hold = s.endsWith("\r") ? "\r" : "";
+    if (hold) s = s.slice(0, -1);
+    s = s.replace(/\r\n?/g, "\n");
+    const out: unknown[] = [];
+    let i: number;
+    while ((i = s.indexOf("\n\n")) >= 0) {
+      const frame = s.slice(0, i);
+      s = s.slice(i + 2);
+      let name = "message";
+      const data: string[] = [];
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("event:")) name = line.slice(6).trim();
+        else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+      }
+      if (name === this.event && data.length) out.push(JSON.parse(data.join("\n")));
+    }
+    this.buf = s + hold;
+    return out;
+  }
+}
+
+function apiErrorFromText(status: number, text: string, statusText: string): LayerHopApiError {
+  let e: { code?: string; message?: string; requestId?: string } | undefined;
+  try {
+    e = (JSON.parse(text) as { error?: typeof e }).error;
+  } catch {
+    e = undefined;
+  }
+  return new LayerHopApiError(e?.code ?? "INTERNAL", e?.message ?? statusText, status, e?.requestId);
+}
+
+/**
+ * SSE over XMLHttpRequest progress events, for runtimes whose `fetch` can't stream (React Native
+ * delivers `responseText` incrementally once a readystatechange/progress handler is set).
+ * Network failures throw a `TypeError`, like `fetch`, so callers retry them.
+ */
+async function* xhrEventStream<T>(url: string, headers: Record<string, string>, event: string, signal?: AbortSignal): AsyncGenerator<T> {
+  if (signal?.aborted) return;
+  const parser = new SseParser(event);
+  const queue: unknown[] = [];
+  let finished = false;
+  let failure: unknown = null;
+  let wake: (() => void) | null = null;
+  const notify = () => {
+    const w = wake;
+    wake = null;
+    w?.();
+  };
+  const xhr = new XMLHttpRequest();
+  let seen = 0;
+  const ok = () => xhr.status >= 200 && xhr.status < 300;
+  const drain = () => {
+    const text = xhr.responseText ?? "";
+    if (!ok() || text.length <= seen) return;
+    try {
+      queue.push(...parser.push(text.slice(seen)));
+    } catch (e) {
+      failure = e;
+    }
+    seen = text.length;
+  };
+  xhr.open("GET", url);
+  for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+  xhr.onreadystatechange = () => {
+    if (xhr.readyState >= 3) drain();
+    if (xhr.readyState === 4 && !finished) {
+      finished = true;
+      if (xhr.status === 0) failure ??= new TypeError("Network request failed");
+      else if (!ok()) failure ??= apiErrorFromText(xhr.status, xhr.responseText ?? "", xhr.statusText);
+    }
+    notify();
+  };
+  xhr.onprogress = () => {
+    drain();
+    notify();
+  };
+  xhr.onerror = () => {
+    finished = true;
+    failure ??= new TypeError("Network request failed");
+    notify();
+  };
+  const onAbort = () => {
+    finished = true;
+    xhr.abort();
+    notify();
+  };
+  signal?.addEventListener("abort", onAbort);
+  xhr.send();
+  try {
+    for (;;) {
+      while (queue.length && !signal?.aborted) yield queue.shift() as T;
+      if (signal?.aborted) return;
+      if (failure) throw failure;
+      if (finished) return;
+      await new Promise<void>((r) => (wake = r));
+    }
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    if (!finished) {
+      finished = true;
+      xhr.abort();
     }
   }
 }

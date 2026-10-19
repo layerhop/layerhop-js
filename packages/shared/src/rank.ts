@@ -23,6 +23,10 @@ export function rankQuotes(quotes: ProviderQuote[]): ProviderQuote[] {
   return [...quotes].sort((a, b) => {
     const gas = Number(!a.gasOnArrival) - Number(!b.gasOnArrival);
     if (gas !== 0) return gas;
+    // Exact-output quotes (destination calls) deliver the same amount: the cheaper input wins.
+    if (a.srcAmount !== undefined && b.srcAmount !== undefined && a.srcAmount !== b.srcAmount) {
+      return BigInt(a.srcAmount) < BigInt(b.srcAmount) ? -1 : 1;
+    }
     const diff = effectiveOutput(b) - effectiveOutput(a);
     if (diff !== 0n) return diff > 0n ? 1 : -1;
     return a.estimatedSeconds - b.estimatedSeconds;

@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@layerhop/ai/core": ["../ai/src/core/index.ts"],
+      "@layerhop/shared": ["../shared/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

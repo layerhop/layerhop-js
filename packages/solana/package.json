@@ -1,0 +1,77 @@
+{
+  "name": "@layerhop/solana",
+  "version": "0.7.0",
+  "description": "Execute LayerHop quotes with a Solana wallet: decode the transaction, sign and send it through @solana/wallet-adapter, Wallet Standard or an injected provider, submit-via-API and co-signed modes, then report it",
+  "license": "MIT",
+  "author": "LayerHop (https://layerhop.com)",
+  "homepage": "https://docs.layerhop.com/guides/wallets",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "import": {
+          "types": "./dist/index.d.ts",
+          "default": "./dist/index.js"
+        },
+        "require": {
+          "types": "./dist/index.d.cts",
+          "default": "./dist/index.cjs"
+        }
+      },
+      "./package.json": "./package.json"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "layerhop",
+    "solana",
+    "wallet-adapter",
+    "wallet-standard",
+    "bridge",
+    "swap",
+    "cross-chain",
+    "web3"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@layerhop/sdk": "workspace:^"
+  },
+  "peerDependencies": {
+    "@solana/web3.js": "^1.98.4"
+  },
+  "devDependencies": {
+    "@solana/wallet-adapter-base": "0.9.27",
+    "@solana/web3.js": "1.98.4",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.7"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/layerhop/layerhop-js.git",
+    "directory": "packages/solana"
+  },
+  "bugs": {
+    "url": "https://github.com/layerhop/layerhop-js/issues"
+  }
+}

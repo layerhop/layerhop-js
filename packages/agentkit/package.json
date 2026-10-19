@@ -1,0 +1,92 @@
+{
+  "name": "@layerhop/agentkit",
+  "version": "0.7.0",
+  "description": "LayerHop action provider for Coinbase AgentKit: best-price cross-chain and same-chain swaps (EVM and Solana), deposit addresses and checkout for on-chain agents. The wallet provider signs; LayerHop never sees keys.",
+  "license": "MIT",
+  "author": "LayerHop (https://layerhop.com)",
+  "homepage": "https://docs.layerhop.com/guides/agent-frameworks",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "import": {
+          "types": "./dist/index.d.ts",
+          "default": "./dist/index.js"
+        },
+        "require": {
+          "types": "./dist/index.d.cts",
+          "default": "./dist/index.cjs"
+        }
+      },
+      "./package.json": "./package.json"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "layerhop",
+    "agentkit",
+    "coinbase-agentkit",
+    "cdp",
+    "action-provider",
+    "ai-agents",
+    "onchain-agents",
+    "bridge",
+    "swap",
+    "cross-chain",
+    "base",
+    "solana",
+    "evm",
+    "defi"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@layerhop/ai": "workspace:^",
+    "zod": "^3.25.76 || ^4.1.8"
+  },
+  "peerDependencies": {
+    "@coinbase/agentkit": ">=0.10.0 <0.11.0",
+    "@solana/web3.js": "^1.98.0"
+  },
+  "peerDependenciesMeta": {
+    "@solana/web3.js": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@coinbase/agentkit": "0.10.4",
+    "@layerhop/shared": "workspace:*",
+    "@solana/web3.js": "1.98.4",
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.7"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/layerhop/layerhop-js.git",
+    "directory": "packages/agentkit"
+  },
+  "bugs": {
+    "url": "https://github.com/layerhop/layerhop-js/issues"
+  }
+}

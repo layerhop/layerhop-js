@@ -22,6 +22,27 @@ export interface QuoteRequest {
    * (`gasOnArrivalApplies`); providers that can't do it ignore it.
    */
   gasOnArrivalUsd?: number;
+  /**
+   * `EXACT_INPUT` (default): `amount` is what the sender pays. `EXACT_OUTPUT`: `amount` is the exact
+   * amount of `dstToken` delivered on the destination (used with destination calls, D-029).
+   */
+  tradeType?: TradeType;
+  /**
+   * Destination calls (D-029): contract calls run on the destination chain with the output, in
+   * order, by the provider's executor contract (msg.sender is the executor, never the user). Only
+   * providers with `destinationCalls` quote such requests; always paired with `EXACT_OUTPUT`.
+   */
+  calls?: EvmCall[];
+}
+
+export type TradeType = "EXACT_INPUT" | "EXACT_OUTPUT";
+
+/** How a provider will run a quote's destination calls. */
+export interface DestinationCallsPlan {
+  /** The calls, exactly as the provider committed to them. */
+  items: EvmCall[];
+  /** Contract that receives the output and makes the calls (their msg.sender). */
+  executor: string;
 }
 
 /** Native gas a quote delivers on top of `dstAmount` (gas on arrival). */
@@ -96,6 +117,13 @@ export interface ProviderQuote {
   expiresAt: number; // unix seconds
   /** Set when the route also delivers native gas to the recipient (request.gasOnArrivalUsd). */
   gasOnArrival?: GasOnArrival;
+  /**
+   * What the sender pays, base units of srcToken. Set on `EXACT_OUTPUT` quotes, where
+   * `request.amount` is the destination amount; otherwise the input is `request.amount`.
+   */
+  srcAmount?: string;
+  /** Set when the request had destination calls and this provider will run them. */
+  calls?: DestinationCallsPlan;
   /** Some providers return the transaction together with the quote. */
   tx?: BuiltTx;
   /** Provider-specific data needed by buildTx / status (never sent to clients). */
@@ -139,6 +167,11 @@ export interface ProviderContext {
 export interface RouteProvider {
   readonly id: ProviderId;
   readonly name: string;
+  /**
+   * Runs `request.calls` on the destination with an exact-output quote (D-029). Providers without it
+   * are skipped when a request has calls or `tradeType: "EXACT_OUTPUT"`.
+   */
+  readonly destinationCalls?: boolean;
   supports(req: QuoteRequest): boolean;
   quote(req: QuoteRequest, ctx: ProviderContext): Promise<ProviderQuote>;
   /** Build the tx for a quote. Must return quote.tx if the provider already supplied it. */

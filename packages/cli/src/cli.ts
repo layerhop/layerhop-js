@@ -6,10 +6,12 @@ import { parseArgs } from "node:util";
 import { CHAINS, LayerHop, LayerHopApiError, TOKENS, findToken, getChain, type DepositAddress, type OrderStatus, type ProviderId, type QuoteResponse, type WebhookEventPayload, type WebhookEventType } from "@layerhop/sdk";
 import { signWebhookPayload } from "@layerhop/shared";
 import { formatSeconds, formatUnits, json, parseUnits, table } from "./format.js";
+import { DEFAULT_FORK_CHAINS, anvilArgs, hasCommand, planForks, startProcess, type RunningProcess } from "./forks.js";
 import { buildSwapLink } from "./link.js";
+import { startMockServer, type MockServer } from "./mock-server.js";
 import { TEMPLATE_NAMES, packageNameFrom, renderTemplate, type TemplateName } from "./templates.js";
 
-export const VERSION = "0.6.0";
+export const VERSION = "0.7.0";
 export const DEFAULT_API_URL = "https://api.layerhop.com";
 
 export interface Io {
@@ -21,6 +23,11 @@ export interface Io {
   /** Starts a child process (devnet). Returns its exit code. */
   spawn?: (cmd: string, args: string[], opts: { cwd: string; env: Record<string, string | undefined> }) => Promise<number>;
   sleep?: (ms: number) => Promise<void>;
+  /** `layerhop dev`: resolves when the server should stop (default: Ctrl-C / SIGTERM). Gets the running server. */
+  waitForExit?: (server: MockServer) => Promise<void>;
+  /** `layerhop dev --fork`: is a command on PATH, and start one in the background. */
+  hasCommand?: (cmd: string) => boolean;
+  startProcess?: (cmd: string, args: string[]) => RunningProcess;
 }
 
 export const HELP = `layerhop ${VERSION} — LayerHop from your terminal
@@ -45,7 +52,9 @@ Commands:
     list [--status active|disabled] [--label <l>]   get <id>   refresh <id>   disable <id>
     simulate <id> <amount>                    Record a fake deposit (test key only)
   init [node|next] <dir>                      Scaffold a minimal project using @layerhop/sdk
-  devnet                                      Run the local API with the mock provider (monorepo only)
+  dev                                         Local mock LayerHop API for offline development and CI
+                                              (deterministic quotes/orders/status + signed webhooks)
+  devnet                                      Run the real API with the mock provider (monorepo only)
 
 Global options:
   --api-url <url>      API origin (env LAYERHOP_API_URL, default ${DEFAULT_API_URL})
@@ -62,6 +71,8 @@ Init options:   --force (write into a non-empty directory)
 Deposit address options: --recipient --refund-to --amount <n> --one-time --base-units --label <l>
                 --metadata k=v,k=v --integrator <id> (create); --status --label --limit --cursor (list);
                 --base-units (simulate)
+Dev options:    --port <n> (default 8787) --host <addr> --webhook-url <url> --secret <whsec_…>
+                --fill-after <seconds> (default 5) --fork [--fork-chains base,arbitrum] (needs anvil)
 Listen options: --forward-to <url> --events <type,type> --secret <whsec_…> (env LAYERHOP_WEBHOOK_SECRET;
                 default: a new secret per session, printed at start)
 
@@ -101,6 +112,12 @@ const OPTIONS = {
   status: { type: "string" },
   limit: { type: "string" },
   cursor: { type: "string" },
+  port: { type: "string" },
+  host: { type: "string" },
+  "webhook-url": { type: "string" },
+  "fill-after": { type: "string" },
+  fork: { type: "boolean" },
+  "fork-chains": { type: "string" },
 } as const;
 
 export type ParsedArgs = ReturnType<typeof parse>;
@@ -339,8 +356,12 @@ export const DEVNET_ENV = { LAYERHOP_ENABLE_MOCK: "1", PROVIDERS: "mock" } as co
 async function cmdDevnet(p: ParsedArgs, io: Io): Promise<number> {
   const root = findMonorepoRoot(io.cwd);
   if (!root) {
-    io.out(`layerhop devnet runs the LayerHop API locally with the deterministic "mock" provider.
-It currently needs a checkout of the LayerHop monorepo:
+    io.out(`layerhop devnet runs the real LayerHop API locally with the deterministic "mock" provider.
+It needs a checkout of the LayerHop monorepo. Outside it, use the built-in mock API instead:
+
+  npx @layerhop/cli dev         # http://localhost:8787, no checkout needed
+
+To run the real API:
 
   git clone <layerhop repo> && cd layerhop && pnpm install
   npx layerhop devnet           # or: LAYERHOP_ENABLE_MOCK=1 PROVIDERS=mock pnpm --filter @layerhop/api dev
@@ -354,6 +375,88 @@ Mock transactions are dummies — never broadcast them.`);
   io.err(`Use it with: LAYERHOP_API_URL=http://localhost:${port} layerhop quote 100 USDC base SOL solana --sender ... --recipient ...`);
   const run = io.spawn ?? defaultSpawn;
   return run("pnpm", ["--filter", "@layerhop/api", "dev"], { cwd: root, env: { ...io.env, ...DEVNET_ENV } });
+}
+
+function waitForSignal(): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      process.off("SIGINT", done);
+      process.off("SIGTERM", done);
+      resolve();
+    };
+    process.once("SIGINT", done);
+    process.once("SIGTERM", done);
+  });
+}
+
+/**
+ * `layerhop dev`: the built-in mock API (src/mock-server.ts), optionally with Anvil forks. Runs until
+ * Ctrl-C. Works anywhere Node 20 runs: no monorepo, database or provider keys.
+ */
+async function cmdDev(p: ParsedArgs, io: Io): Promise<number> {
+  const port = int(p.opts.port ?? io.env.LAYERHOP_DEV_PORT ?? "8787", "port")!;
+  const fillAfter = int(p.opts["fill-after"], "fill-after");
+  const webhookUrl = p.opts["webhook-url"];
+  if (webhookUrl) {
+    try {
+      new URL(webhookUrl);
+    } catch {
+      throw new UsageError("--webhook-url must be a URL, e.g. http://localhost:3000/webhooks");
+    }
+  }
+  const secret = webhookUrl ? (p.opts.secret ?? io.env.LAYERHOP_WEBHOOK_SECRET ?? randomSecret()) : undefined;
+
+  const procs: RunningProcess[] = [];
+  const forks: { chain: string; chainId: number; rpcUrl: string }[] = [];
+  if (p.opts.fork || p.opts["fork-chains"]) {
+    const chains = (p.opts["fork-chains"] ?? DEFAULT_FORK_CHAINS.join(",")).split(",").map((s) => s.trim()).filter(Boolean);
+    let plan;
+    try {
+      plan = planForks(chains, io.env);
+    } catch (e) {
+      throw new UsageError((e as Error).message);
+    }
+    if (!(io.hasCommand ?? hasCommand)("anvil")) {
+      io.err("--fork needs Anvil (Foundry): curl -L https://foundry.paradigm.xyz | bash && foundryup");
+      io.err("Starting the mock API without forks.");
+    } else {
+      const start = io.startProcess ?? startProcess;
+      for (const f of plan) {
+        procs.push(start("anvil", anvilArgs(f)));
+        forks.push({ chain: f.slug, chainId: f.chainId, rpcUrl: f.rpcUrl });
+        io.err(`Anvil fork of ${f.slug} (chain id ${f.chainId}) on ${f.rpcUrl}`);
+      }
+    }
+  }
+
+  let server: MockServer;
+  try {
+    server = await startMockServer({
+      port, host: p.opts.host, webhookUrl, webhookSecret: secret, fillAfterMs: fillAfter === undefined ? undefined : fillAfter * 1000,
+      health: forks.length ? { forks } : undefined, fetch: io.fetch,
+      log: p.opts.json ? undefined : (line) => io.err(`${new Date().toISOString().slice(11, 19)}  ${line}`),
+    });
+  } catch (e) {
+    for (const pr of procs) pr.kill();
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "EADDRINUSE") throw new UsageError(`Port ${port} is in use. Pick another with --port`);
+    throw e;
+  }
+  if (p.opts.json) io.out(json({ url: server.url, webhookUrl: webhookUrl ?? null, webhookSecret: secret ?? null, forks }));
+  else {
+    io.out(`LayerHop mock API on ${server.url}`);
+    io.out(`  export LAYERHOP_API_URL=${server.url}`);
+    if (webhookUrl) io.out(`  webhooks -> ${webhookUrl} signed with ${secret}${p.opts.secret || io.env.LAYERHOP_WEBHOOK_SECRET ? " (yours)" : " (set LAYERHOP_WEBHOOK_SECRET to keep one)"}`);
+    io.out("  Amounts ending in 4001 refund, 4002 fail, 4004 have no route; anything else fills.");
+    io.out("  Transactions are placeholders that move no funds. Never broadcast them. Ctrl-C to stop.");
+  }
+  try {
+    await (io.waitForExit ?? waitForSignal)(server);
+  } finally {
+    await server.close();
+    for (const pr of procs) pr.kill();
+  }
+  return 0;
 }
 
 function defaultSpawn(cmd: string, args: string[], opts: { cwd: string; env: Record<string, string | undefined> }): Promise<number> {
@@ -675,6 +778,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
       case "status": return await cmdStatus(p, io);
       case "link": return cmdLink(p, io);
       case "init": return await cmdInit(p, io);
+      case "dev": return await cmdDev(p, io);
       case "devnet": return await cmdDevnet(p, io);
       case "listen": return await cmdListen(p, io);
       case "trigger": return await cmdTrigger(p, io);
