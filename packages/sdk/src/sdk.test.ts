@@ -166,6 +166,54 @@ describe("sdk", () => {
     ]);
   });
 
+  it("depositAddresses: create, get, list, refresh, disable and simulate hit the deposit-address routes", async () => {
+    const seen: string[] = [];
+    const lh = new LayerHop({ baseUrl: "http://x", apiKey: "lh_test_k", fetch: fakeFetch((url, init) => {
+      seen.push(`${init?.method ?? "GET"} ${url} ${init?.body ?? ""}`);
+      if (url.includes("da_off")) return [409, { error: { code: "CONFLICT", message: "This deposit address is disabled" } }];
+      if (url.endsWith("/simulate")) return [201, { order: { quoteId: "dep_1", status: "submitted", depositAddressId: "da_1", livemode: false } }];
+      if (url.endsWith("/deposit-addresses") && init?.method === "POST") {
+        return [201, { id: "da_1", object: "deposit_address", address: "0xabc", reusable: true, estimate: { amount: "100000000", dstAmount: "99780000", dstAmountMin: "99280000", estimatedSeconds: 12 } }];
+      }
+      return [200, { id: "da_1", object: "deposit_address", status: "active", deposits: [], depositAddresses: [], nextCursor: null }];
+    }) });
+    const da = await lh.depositAddresses.create({
+      srcChain: "base", srcToken: "USDC", dstChain: "arbitrum", dstToken: "USDC",
+      recipient: "0x2", refundTo: "0x3", label: "user-1", integratorFeeBps: 25,
+    });
+    expect(da.address).toBe("0xabc");
+    expect(da.estimate.dstAmount).toBe("99780000");
+    await lh.depositAddresses.get("da_1");
+    await lh.depositAddresses.list({ status: "active", label: "user-1", limit: 10 });
+    await lh.depositAddresses.list();
+    await lh.depositAddresses.refresh("da_1");
+    await lh.depositAddresses.disable("da/1");
+    const order = await lh.depositAddresses.simulate("da_1", { amount: "25000000" });
+    expect(order).toMatchObject({ quoteId: "dep_1", depositAddressId: "da_1" });
+    await expect(lh.depositAddresses.refresh("da_off")).rejects.toMatchObject({ code: "CONFLICT", status: 409 });
+    // Client-level partner options apply to create unless overridden.
+    const bodies: string[] = [];
+    const partner = new LayerHop({ baseUrl: "http://x", apiKey: "k", integrator: "myapp", integratorFeeBps: 30, fetch: fakeFetch((_u, init) => {
+      bodies.push(String(init?.body));
+      return [201, { id: "da_2" }];
+    }) });
+    await partner.depositAddresses.create({ srcChain: 8453, srcToken: "USDC", dstChain: "solana", dstToken: "SOL", recipient: "So1", refundTo: "0x3" });
+    await partner.depositAddresses.create({ srcChain: 8453, srcToken: "USDC", dstChain: "solana", dstToken: "SOL", recipient: "So1", refundTo: "0x3", integratorFeeBps: 0 });
+    expect(bodies.map((b) => JSON.parse(b))).toEqual([
+      { integrator: "myapp", integratorFeeBps: 30, srcChain: 8453, srcToken: "USDC", dstChain: "solana", dstToken: "SOL", recipient: "So1", refundTo: "0x3" },
+      { integrator: "myapp", integratorFeeBps: 0, srcChain: 8453, srcToken: "USDC", dstChain: "solana", dstToken: "SOL", recipient: "So1", refundTo: "0x3" },
+    ]);
+    expect(seen.slice(0, 7)).toEqual([
+      'POST http://x/v1/deposit-addresses {"integratorFeeBps":25,"srcChain":"base","srcToken":"USDC","dstChain":"arbitrum","dstToken":"USDC","recipient":"0x2","refundTo":"0x3","label":"user-1"}',
+      "GET http://x/v1/deposit-addresses/da_1 ",
+      "GET http://x/v1/deposit-addresses?status=active&label=user-1&limit=10 ",
+      "GET http://x/v1/deposit-addresses ",
+      "POST http://x/v1/deposit-addresses/da_1/refresh {}",
+      "POST http://x/v1/deposit-addresses/da%2F1/disable {}",
+      'POST http://x/v1/deposit-addresses/da_1/simulate {"amount":"25000000"}',
+    ]);
+  });
+
   it("checkout.refunds: create posts the options, list unwraps refunds; conflicts are typed", async () => {
     const seen: string[] = [];
     const refund = { id: "re_1", object: "refund", sessionId: "cs_1", status: "pending", amount: "1000000", quoteId: "q_r" };

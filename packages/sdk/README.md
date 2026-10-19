@@ -74,6 +74,7 @@ try {
 | `checkout.refunds.create(sessionId, params?)` / `.list(sessionId)` | `/v1/checkout/sessions/{id}/refunds` | Refund a paid session from your own wallet (build, sign, report). |
 | `invoices.create / get / list / update / send / void` | `/v1/invoices` | Invoices emailed to a customer and paid through checkout (API key). |
 | `invoices.publicView(id)` / `invoices.pay(id)` | `/v1/invoices/{id}/public`, `/pay` | The customer's side (public). |
+| `depositAddresses.create / get / list / refresh / disable / simulate` | `/v1/deposit-addresses` | Deposit addresses (beta): your user sends tokens to an address, no wallet connection (API key). |
 
 ### Invoices and refunds
 
@@ -92,6 +93,19 @@ const invoice = await lh.invoices.create({
 const { refund, quote } = await lh.checkout.refunds.create("cs_...", { amount: "10000000", reason: "Partial refund" });
 const tx = await lh.buildTx(quote.quoteId);            // sign and broadcast from quote.from
 await lh.reportSubmitted(quote.quoteId, "0xTxHash");   // the refund completes when the order fills
+```
+
+### Deposit addresses (beta)
+
+```ts
+// Your user sends USDC on Base to da.address; USDC arrives on Arbitrum. Each deposit is an order.
+const da = await lh.depositAddresses.create({
+  srcChain: "base", srcToken: "USDC", dstChain: "arbitrum", dstToken: "USDC",
+  recipient: "0xUserOnArbitrum", refundTo: "0xUserOnBase",
+});
+await lh.depositAddresses.refresh(da.id);                                 // "I sent it": check now
+const { deposits } = await lh.depositAddresses.get(da.id);               // orders with depositAddressId
+await lh.depositAddresses.simulate(da.id, { amount: "25000000" });       // test keys only
 ```
 
 Options for `new LayerHop(options)`: `baseUrl` (default `https://api.layerhop.com`), `apiKey`,

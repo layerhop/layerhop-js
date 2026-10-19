@@ -114,3 +114,53 @@ export interface RouteProvider {
   /** Only for providers whose txs set `submitViaApi`: forward a user-signed tx (base64). */
   submit?(quote: ProviderQuote, signedTx: string, ctx: ProviderContext): Promise<{ txHash: string }>;
 }
+
+/** A deposit address request (D-024): the end user sends `srcToken`, the provider delivers `dstToken`. */
+export interface DepositAddressRequest {
+  srcChainId: ChainId;
+  srcToken: string;
+  dstChainId: ChainId;
+  dstToken: string;
+  recipient: string;
+  /** Refunds go here (an address on the source chain). */
+  refundTo: string;
+  /** Reusable (open) addresses accept any amount; one-time (strict) addresses expect exactly this. */
+  amount: string;
+  reusable: boolean;
+}
+
+export interface CreatedDepositAddress {
+  address: string;
+  /** Provider reference for the address (Relay: quote-time request id). */
+  providerRef?: string;
+  /** Combined fee (ours + partner) the provider accepted, in bps of the input. */
+  feeBps: number;
+  /** Estimate for `amount`. */
+  dstAmount: string;
+  dstAmountMin: string;
+  estimatedSeconds: number;
+}
+
+/** One deposit the provider saw on an address. */
+export interface ObservedDeposit {
+  /** Provider request id; stable per deposit. */
+  id: string;
+  state: OrderState;
+  /** The request was replaced by a newer one (track that one instead). */
+  superseded: boolean;
+  amount?: string;
+  dstAmount?: string;
+  sender?: string;
+  srcTxHash?: string;
+  dstTxHash?: string;
+  /** bps of the input actually paid to LayerHop's fee recipient (0 when the provider dropped it). */
+  appliedFeeBps: number;
+  createdAt?: string;
+}
+
+export interface DepositAddressProvider {
+  readonly id: ProviderId;
+  supports(req: Pick<DepositAddressRequest, "srcChainId" | "dstChainId">): boolean;
+  create(req: DepositAddressRequest, ctx: ProviderContext): Promise<CreatedDepositAddress>;
+  deposits(address: string, ctx: ProviderContext): Promise<ObservedDeposit[]>;
+}

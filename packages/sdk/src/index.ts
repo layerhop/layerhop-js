@@ -89,6 +89,8 @@ export interface OrderSummary {
   checkoutSessionId?: string | null;
   /** The checkout refund this order sends, if any. */
   refundId?: string | null;
+  /** The deposit address this order came from, if any (`quoteId` then starts with `dep_`). */
+  depositAddressId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -351,6 +353,85 @@ export interface InvoicePayResponse {
   sessionId: string;
   /** The hosted checkout page. */
   url: string;
+}
+
+export type DepositAddressStatus = "active" | "disabled";
+
+export interface CreateDepositAddressParams {
+  /** Chain id or slug your user deposits on. */
+  srcChain: string | number;
+  /** The token to deposit (address / mint or symbol). Other tokens sent to the address may be unrecoverable. */
+  srcToken: string;
+  /** Chain id or slug to deliver on. */
+  dstChain: string | number;
+  dstToken: string;
+  /** Receives `dstToken` on `dstChain`. */
+  recipient: string;
+  /** Your user's address on `srcChain` for refunds. Never an exchange (CEX) deposit address. */
+  refundTo: string;
+  /** true (default): reusable for this route with any amount. false: one-time, exactly `amount`. */
+  reusable?: boolean;
+  /** Base units of `srcToken`. Required when `reusable` is false; otherwise sizes the estimate (default ≈ $100). */
+  amount?: string;
+  /** Your reference (1–64 chars), filterable in `list`. */
+  label?: string;
+  /** Up to 20 string key-value pairs. */
+  metadata?: Record<string, string>;
+  /** Partner id whose fee applies, as for quotes. */
+  integrator?: string;
+  /** Partner fee in bps (up to your partner `maxFeeBps`), as for quotes. */
+  integratorFeeBps?: number;
+}
+
+/** An address your user sends tokens to; each deposit becomes an order (`quoteId` starting with `dep_`). */
+export interface DepositAddress {
+  id: string;
+  object: "deposit_address";
+  livemode: boolean;
+  status: DepositAddressStatus;
+  /** `relay` (live) or `sandbox` (test mode, a fake address). */
+  provider: string;
+  /** Where your user sends `token` on `chainId`. */
+  address: string;
+  /** Source chain. */
+  chainId: number;
+  /** Token to deposit (address or mint). */
+  token: string;
+  dstChainId: number;
+  dstToken: string;
+  recipient: string;
+  refundTo: string;
+  reusable: boolean;
+  /** The exact amount a one-time address expects; null when reusable. */
+  amount: string | null;
+  fees: { ourFeeBps: number; integratorFeeBps: number; integrator: string | null };
+  label: string | null;
+  metadata: Record<string, string> | null;
+  depositCount: number;
+  lastDepositAt: string | null;
+  createdAt: string;
+}
+
+/** `create` response: the address plus an estimate for `estimate.amount`. */
+export interface DepositAddressCreated extends DepositAddress {
+  estimate: { amount: string; dstAmount: string; dstAmountMin: string; estimatedSeconds: number };
+}
+
+/** A deposit (order) as the account owner sees it. */
+export interface DepositOrder extends OrderSummary {
+  keyId: string | null;
+  partnerId: string | null;
+  partnerFeeEstimate: string;
+}
+
+/** `get` response: the address plus its 20 most recent deposits, newest first. */
+export interface DepositAddressWithDeposits extends DepositAddress {
+  deposits: DepositOrder[];
+}
+
+export interface DepositAddressList {
+  depositAddresses: DepositAddress[];
+  nextCursor: string | null;
 }
 
 export type RefundStatus = "pending" | "submitted" | "completed" | "failed";
@@ -645,6 +726,39 @@ export class LayerHop {
     /** Public: start (or reuse) the checkout session that pays the invoice; send the customer to `url`. */
     pay: (id: string): Promise<InvoicePayResponse> =>
       this.call(`/invoices/${encodeURIComponent(id)}/pay`, { method: "POST", body: "{}" }),
+  };
+
+  /**
+   * Deposit addresses (beta, API key): your user sends `srcToken` to an address and receives
+   * `dstToken` on `dstChain`, without connecting a wallet. Each deposit becomes an order with
+   * `depositAddressId` (and the usual `order.*` webhooks). `simulate` works with test keys only.
+   */
+  readonly depositAddresses = {
+    /** `integrator` / `integratorFeeBps` default to the client options, as for `quote`. */
+    create: (p: CreateDepositAddressParams): Promise<DepositAddressCreated> =>
+      this.call("/deposit-addresses", {
+        method: "POST",
+        body: JSON.stringify({ integrator: this.opts.integrator, integratorFeeBps: this.opts.integratorFeeBps, ...p }),
+      }),
+    /** The address and its 20 most recent deposits. */
+    get: (id: string): Promise<DepositAddressWithDeposits> => this.call(`/deposit-addresses/${encodeURIComponent(id)}`),
+    list: (p: { status?: DepositAddressStatus; label?: string; cursor?: string; limit?: number } = {}): Promise<DepositAddressList> => {
+      const q = new URLSearchParams();
+      if (p.status) q.set("status", p.status);
+      if (p.label) q.set("label", p.label);
+      if (p.cursor) q.set("cursor", p.cursor);
+      if (p.limit !== undefined) q.set("limit", String(p.limit));
+      return this.call(`/deposit-addresses${q.size ? `?${q}` : ""}`);
+    },
+    /** Check for deposits now (call it when your user says they sent funds). */
+    refresh: (id: string): Promise<DepositAddress> =>
+      this.call(`/deposit-addresses/${encodeURIComponent(id)}/refresh`, { method: "POST", body: "{}" }),
+    /** Stop tracking the address; stop showing it to your user. */
+    disable: (id: string): Promise<DepositAddress> =>
+      this.call(`/deposit-addresses/${encodeURIComponent(id)}/disable`, { method: "POST", body: "{}" }),
+    /** Test mode only: record a deposit of `amount` (ends in 4001 → refunded, 4002 → failed). */
+    simulate: async (id: string, p: { amount: string }): Promise<DepositOrder> =>
+      (await this.call<{ order: DepositOrder }>(`/deposit-addresses/${encodeURIComponent(id)}/simulate`, { method: "POST", body: JSON.stringify(p) })).order,
   };
 
   /**
