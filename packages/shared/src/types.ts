@@ -68,7 +68,21 @@ export interface FeeBreakdown {
   integratorFeeBps?: number;
   /** Partner id that earns integratorFeeBps. */
   integrator?: string;
+  /**
+   * Who receives positive slippage (output above `dstAmount`), when the provider documents it (D-030).
+   * - `user`: the recipient keeps all of it.
+   * - `layerhop`: surplus ABOVE `dstAmount` goes to LayerHop, capped at `surplusMaxBps` of `dstAmount`;
+   *   the user still receives at least `dstAmount` whenever execution reaches it (never less than the quote
+   *   because of capture). Only with POSITIVE_SLIPPAGE_CAPTURE=1.
+   * - `provider`: the provider keeps it (e.g. KyberSwap documents that surplus accrues to KyberSwap).
+   * Absent when the provider does not document a policy.
+   */
+  surplusPolicy?: SurplusPolicy;
+  /** With `surplusPolicy: "layerhop"`: the most LayerHop can take, in bps of `dstAmount`. */
+  surplusMaxBps?: number;
 }
+
+export type SurplusPolicy = "user" | "layerhop" | "provider";
 
 /** A plain EVM call: target, calldata, native value (wei, integer string). */
 export type EvmCall = { to: string; data: string; value: string };
@@ -161,6 +175,12 @@ export interface ProviderContext {
   signal?: AbortSignal;
   /** RPC endpoints for providers that build txs client-side (e.g. Mayan's Solana path needs a blockhash + account reads). */
   rpc?: { solana?: string };
+  /**
+   * D-030 positive-slippage capture (POSITIVE_SLIPPAGE_CAPTURE=1, default off). When set, providers with an
+   * official surplus-recipient parameter send surplus above the quoted output to `feeRecipients`, capped at
+   * `maxBps` of the quoted output. Absent = off: the user keeps whatever the provider gives them.
+   */
+  surplusCapture?: { maxBps: number };
 }
 
 /** Every liquidity source (partner today, our own solver later) implements this. */

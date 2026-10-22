@@ -113,6 +113,8 @@ export interface QuoteResponse {
   best: Quote;
   quotes: Quote[];
   errors: { provider: string; code: string; message: string }[];
+  /** Present only when the request was served, but not exactly as asked (e.g. `GAS_ON_ARRIVAL_UNAVAILABLE`). Ignore codes you don't know. */
+  warnings?: { code: string; message: string }[];
   /** false when the request used an `lh_test_` key (sandbox quotes). */
   livemode?: boolean;
 }
@@ -171,6 +173,8 @@ export interface OrderList {
 export interface SubmittedResponse {
   quoteId: string;
   status: OrderLifecycleStatus;
+  /** false when the tx was not visible on chain yet (provisional); report it again later to confirm it. */
+  verified?: boolean;
 }
 
 /** `POST /v1/simulate`: a dry run of the tx for a quote. Nothing is signed or sent. */
@@ -261,6 +265,8 @@ export interface CheckoutSession {
   /** Only with the owning account's API key. */
   reference?: string | null;
   metadata?: Record<string, string> | null;
+  /** Only when paid plans are enabled: false when the merchant's plan is white-label (hide LayerHop branding). */
+  branding?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -748,7 +754,11 @@ export interface WebhookEventPayload {
 export type PriceId = string | { chainId: string | number; address: string };
 
 export class LayerHopApiError extends Error {
-  constructor(public readonly code: string, message: string, public readonly status: number, public readonly requestId?: string) {
+  constructor(
+    public readonly code: string, message: string, public readonly status: number, public readonly requestId?: string,
+    /** Extra context, e.g. `details.errors` (per-provider errors) on `NO_ROUTE`. */
+    public readonly details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = "LayerHopApiError";
   }
@@ -789,8 +799,8 @@ export class LayerHop {
     const res = await this.fetchFn(`${this.baseUrl}/v1${path}`, { ...init, headers: { ...headers, ...(init?.headers as Record<string, string>) } });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const e = (body as { error?: { code: string; message: string; requestId?: string } }).error;
-      throw new LayerHopApiError(e?.code ?? "INTERNAL", e?.message ?? res.statusText, res.status, e?.requestId);
+      const e = (body as { error?: { code: string; message: string; requestId?: string; details?: Record<string, unknown> } }).error;
+      throw new LayerHopApiError(e?.code ?? "INTERNAL", e?.message ?? res.statusText, res.status, e?.requestId, e?.details);
     }
     return body as T;
   }
@@ -1116,8 +1126,8 @@ export class LayerHop {
     }
     const res = await this.fetchFn(url, { headers, signal });
     if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: { code: string; message: string; requestId?: string } };
-      throw new LayerHopApiError(body.error?.code ?? "INTERNAL", body.error?.message ?? res.statusText, res.status, body.error?.requestId);
+      const body = (await res.json().catch(() => ({}))) as { error?: { code: string; message: string; requestId?: string; details?: Record<string, unknown> } };
+      throw new LayerHopApiError(body.error?.code ?? "INTERNAL", body.error?.message ?? res.statusText, res.status, body.error?.requestId, body.error?.details);
     }
     const parser = new SseParser(event);
     if (!res.body || typeof res.body.getReader !== "function" || typeof TextDecoder === "undefined") {
@@ -1206,13 +1216,13 @@ class SseParser {
 }
 
 function apiErrorFromText(status: number, text: string, statusText: string): LayerHopApiError {
-  let e: { code?: string; message?: string; requestId?: string } | undefined;
+  let e: { code?: string; message?: string; requestId?: string; details?: Record<string, unknown> } | undefined;
   try {
     e = (JSON.parse(text) as { error?: typeof e }).error;
   } catch {
     e = undefined;
   }
-  return new LayerHopApiError(e?.code ?? "INTERNAL", e?.message ?? statusText, status, e?.requestId);
+  return new LayerHopApiError(e?.code ?? "INTERNAL", e?.message ?? statusText, status, e?.requestId, e?.details);
 }
 
 /**

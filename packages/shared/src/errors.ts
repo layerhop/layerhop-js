@@ -12,6 +12,7 @@ export const ERROR_CODES = {
   PROVIDER_ERROR: 502,
   PROVIDER_TIMEOUT: 504,
   RATE_LIMITED: 429,
+  QUOTA_EXCEEDED: 429,
   UNAUTHORIZED: 401,
   FORBIDDEN: 403,
   NOT_FOUND: 404,
@@ -26,6 +27,8 @@ export class LayerHopError extends Error {
     public readonly code: ErrorCode,
     message: string,
     public readonly details?: unknown,
+    /** Send `details` to the client (`error.details`). Off by default: details often hold raw provider bodies. */
+    public readonly exposeDetails = false,
   ) {
     super(message);
     this.name = "LayerHopError";
@@ -34,6 +37,11 @@ export class LayerHopError extends Error {
     return ERROR_CODES[this.code];
   }
   toJSON(requestId?: string) {
-    return { error: { code: this.code, message: this.message, requestId, docsUrl: `https://docs.layerhop.com/errors/${this.code}` } };
+    return {
+      error: {
+        code: this.code, message: this.message, requestId, docsUrl: `https://docs.layerhop.com/errors/${this.code}`,
+        ...(this.exposeDetails && this.details !== undefined ? { details: this.details } : {}),
+      },
+    };
   }
 }

@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { addressVm, applyBps, CHAINS, DEFAULT_RPC_URLS, getChain, minAfterSlippage, POPULAR_CHAIN_IDS, rankQuotes, rpcUrl, SOLANA_CHAIN_ID, findToken, LayerHopError, paidWithLabel, gasOnArrivalApplies, requestedGasOnArrivalUsd, HYPERLIQUID_CHAIN_ID, isDestinationOnly } from "./index.js";
+import { CANONICAL_TOKENS, TOKENS, canonicalTokenAddress } from "./index.js";
 import type { ProviderQuote } from "./index.js";
+
+describe("canonical tokens", () => {
+  it("lists EVM addresses under upper-case symbols and never overrides a curated entry", () => {
+    for (const [chainId, bySym] of Object.entries(CANONICAL_TOKENS)) {
+      for (const [sym, addr] of Object.entries(bySym)) {
+        expect(sym).toBe(sym.toUpperCase());
+        expect(addr).toMatch(/^0x[0-9a-fA-F]{40}$/);
+        expect(TOKENS.some((t) => t.chainId === Number(chainId) && t.symbol.toUpperCase() === sym)).toBe(false);
+      }
+    }
+    expect(canonicalTokenAddress(43114, " usdc ")).toBe("0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E");
+    expect(canonicalTokenAddress(1, "USDC")).toBeUndefined();
+  });
+});
 
 const q = (provider: ProviderQuote["provider"], dstAmount: string, estimatedSeconds = 10) =>
   ({ provider, dstAmount, estimatedSeconds }) as ProviderQuote;

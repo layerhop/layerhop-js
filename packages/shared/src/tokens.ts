@@ -30,6 +30,43 @@ export const TOKENS: readonly Token[] = [
   { chainId: SOLANA_CHAIN_ID, address: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", symbol: "USDT", decimals: 6 },
 ];
 
+/**
+ * The canonical token for a popular symbol on chains that have no curated entry for it, used to pick
+ * one token when several verified tokens share a symbol (native Circle USDC over bridged look-alikes,
+ * the main WETH over wrapped copies). Keys are upper-case symbols. Checked on-chain (symbol, decimals)
+ * and against the LI.FI list on 2026-10-22.
+ */
+export const CANONICAL_TOKENS: Readonly<Record<number, Readonly<Record<string, string>>>> = {
+  // Optimism
+  10: {
+    WETH: "0x4200000000000000000000000000000000000006", WBTC: "0x68f180fcCe6836688e9084f035309E29Bf0A2095",
+    USDT: "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58", DAI: "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
+  },
+  // Polygon
+  137: {
+    WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", WBTC: "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6",
+    USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", DAI: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+  },
+  // Sonic
+  146: { USDC: "0x29219dd400f2Bf60E5a23d13Be72B486D4038894", WETH: "0x50c42dEAcD8Fc9773493ED674b675bE577f2634b" },
+  // HyperEVM: Circle's native USDC (6 decimals)
+  999: { USDC: "0xb88339CB7199b77E23DB6E890353E22632Ba630f" },
+  // Base
+  8453: {
+    WETH: "0x4200000000000000000000000000000000000006", USDT: "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",
+    DAI: "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb", CBBTC: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+  },
+  // Plasma
+  9745: { USDT0: "0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb" },
+  // Avalanche: Circle's native USDC (not bridged USDC.e) and native USDt
+  43114: { USDC: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E", USDT: "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7" },
+};
+
+/** The canonical address for `symbol` on a chain (see CANONICAL_TOKENS), if listed. */
+export function canonicalTokenAddress(chainId: ChainId, symbol: string): string | undefined {
+  return CANONICAL_TOKENS[chainId]?.[symbol.trim().toUpperCase()];
+}
+
 export function tokensForChain(chainId: ChainId): Token[] {
   return TOKENS.filter((t) => t.chainId === chainId);
 }
