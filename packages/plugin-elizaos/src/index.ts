@@ -154,7 +154,7 @@ export function createLayerHopPlugin(opts: LayerHopPluginOptions = {}): Plugin {
     name: "LAYERHOP_GET_QUOTE",
     similes: ["LAYERHOP_QUOTE", "BRIDGE_QUOTE", "SWAP_QUOTE", "CROSS_CHAIN_QUOTE"],
     description: "Get the best price to swap or bridge tokens (same chain or across EVM chains and Solana) with every fee spelled out. Read-only; nothing is signed.",
-    examples: [ex("How much SOL do I get for 100 USDC on Base? My address is 0x... and my Solana address is ...", "Best route: ~0.95 SOL (min 0.945) via relay in ~2 min. LayerHop fee 0.2%.", "LAYERHOP_GET_QUOTE")],
+    examples: [ex("How much SOL do I get for 100 USDC on Base? My address is 0x... and my Solana address is ...", "Best route: ~0.95 SOL (min 0.945) via relay in ~2 min. LayerHop fee 0.1%.", "LAYERHOP_GET_QUOTE")],
     validate: async () => true,
     handler: async (rt, message, state, options, callback) => {
       const t = tool(rt, "get_quote");

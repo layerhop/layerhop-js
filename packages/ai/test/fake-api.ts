@@ -31,7 +31,7 @@ export const sampleQuote = (over: Record<string, unknown> = {}) => ({
   dstAmount: "949742908",
   dstAmountMin: "944994194",
   estimatedSeconds: 95,
-  fees: { ourFeeBps: 20, providerFeeUsd: 0.12, gasUsd: 0.001 },
+  fees: { ourFeeBps: 10, providerFeeUsd: 0.12, gasUsd: 0.001 },
   expiresAt: Math.floor(Date.now() / 1000) + 30,
   ...over,
 });
@@ -61,7 +61,7 @@ export const sampleDa = (over: Record<string, unknown> = {}) => ({
   refundTo: EVM,
   reusable: true,
   amount: null,
-  fees: { ourFeeBps: 20, integratorFeeBps: 0, integrator: null },
+  fees: { ourFeeBps: 10, integratorFeeBps: 0, integrator: null },
   label: null,
   metadata: null,
   depositCount: 0,

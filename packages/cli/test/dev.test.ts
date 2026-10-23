@@ -42,9 +42,9 @@ describe("mock API (layerhop dev)", () => {
 
     const q = await lh.quote({ srcChain: "base", srcToken: "USDC", amount: "100000000", dstChain: "solana", dstToken: "SOL", sender: SENDER, recipient: SOL_RECIPIENT });
     expect(q.best.provider).toBe("mock");
-    // 100 USDC − 20 bps = 99.8 USD at $150/SOL = 0.665333333 SOL (9 decimals)
-    expect(q.best.dstAmount).toBe("665333333");
-    expect(q.best.fees.ourFeeBps).toBe(20);
+    // 100 USDC − 10 bps = 99.9 USD at $150/SOL = 0.666 SOL (9 decimals)
+    expect(q.best.dstAmount).toBe("666000000");
+    expect(q.best.fees.ourFeeBps).toBe(10);
     expect(q.livemode).toBe(false);
 
     const tx = await lh.buildTx(q.best.quoteId);

@@ -71,7 +71,7 @@ describe("ElizaOS plugin", () => {
     const { rt, prompts } = fakeRuntime({ LAYERHOP_INTEGRATOR: "eliza-agent", LAYERHOP_INTEGRATOR_FEE_BPS: "15" });
     const { result, replies } = await run(action(plugin, "LAYERHOP_GET_QUOTE"), rt, msg("swap 100 USDC on base to ETH"));
     expect(result.success).toBe(true);
-    expect(replies[0]).toMatch(/LayerHop fee 0.2%/);
+    expect(replies[0]).toMatch(/LayerHop fee 0.1%/);
     expect(replies[0]).toMatch(/https:\/\/layerhop\.com\/swap\?/);
     expect(prompts[0]).toMatch(/get_quote/);
     const q = api.last("/v1/quote")!.url.searchParams;

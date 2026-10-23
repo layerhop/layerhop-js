@@ -30,7 +30,7 @@ pnpm --filter @layerhop/shared typecheck
 | `src/chains.ts` | `CHAINS`: Ethereum, Arbitrum, Base, Optimism, BNB Chain, Polygon, Solana. `SOLANA_CHAIN_ID = 7565164` (internal id). `getChain(idOrSlug)`. |
 | `src/tokens.ts` | `TOKENS` (natives plus USDC/USDT), `EVM_NATIVE` (zero address), `SOL_NATIVE` (wSOL mint), `findToken`, `tokensForChain`, `isNative` |
 | `src/errors.ts` | `ERROR_CODES` (code → HTTP status), `LayerHopError`, and the JSON error envelope with `docsUrl` |
-| `src/fees.ts` | `DEFAULT_FEE_BPS` per channel (web 30, widget 30, api 20, bot 90), `applyBps`, `minAfterSlippage`. All math is BigInt on integer strings. |
+| `src/fees.ts` | `DEFAULT_FEE_BPS` per channel (web 15, widget 15, api 10, bot 45; D-034) and `DEFAULT_CHECKOUT_DIRECT_FEE_BPS` (25), `applyBps`, `minAfterSlippage`. All math is BigInt on integer strings. |
 | `src/rank.ts` | `rankQuotes`: highest output adjusted for time (1 bp per minute after the first, capped at 50 bps), then fastest. Never ranks by our fee. |
 | `src/http.ts` | `fetchJson`: timeout, and HTTP or network failures turned into `PROVIDER_*` / `RATE_LIMITED` errors |
 | `src/rpc.ts` | `DEFAULT_RPC_URLS` (public nodes), `rpcUrl(chainId, env)` with `RPC_URL_<chainId>` / `SOLANA_RPC_URL` overrides |

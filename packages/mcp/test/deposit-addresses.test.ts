@@ -22,7 +22,7 @@ const sampleDa = (over: Record<string, unknown> = {}) => ({
   refundTo: EVM,
   reusable: true,
   amount: null,
-  fees: { ourFeeBps: 20, integratorFeeBps: 0, integrator: null },
+  fees: { ourFeeBps: 10, integratorFeeBps: 0, integrator: null },
   label: "user-1",
   metadata: null,
   depositCount: 0,
@@ -45,7 +45,7 @@ const sampleOrder = (over: Record<string, unknown> = {}) => ({
   recipient: EVM,
   amount: "25000000",
   dstAmount: "24950000",
-  ourFeeBps: 20,
+  ourFeeBps: 10,
   partnerFeeBps: 0,
   srcTxHash: null,
   dstTxHash: null,
@@ -111,7 +111,7 @@ describe("deposit address tools", () => {
     const post = api.calls.find((c) => c.url.pathname === "/v1/deposit-addresses" && c.method === "POST")!;
     expect(post.body).toMatchObject({ srcChain: 8453, srcToken: BASE_USDC, dstChain: 42161, dstToken: ARB_USDC, recipient: EVM, refundTo: EVM, reusable: false, amount: "25000000", label: "user-1", metadata: { user: "1" } });
     expect(r.depositAddress).toMatchObject({ id: "da_test1", mode: "test", address: FAKE, send: { token: "USDC", chain: "Base" }, deliver: { token: "USDC", chain: "Arbitrum" } });
-    expect(r.depositAddress.fees.layerhop).toEqual({ bps: 20, percent: "0.2%" });
+    expect(r.depositAddress.fees.layerhop).toEqual({ bps: 10, percent: "0.1%" });
     expect(r.estimate).toMatchObject({ ifYouSend: "100 USDC", youReceive: "99.78 USDC", minimumReceived: "99.28 USDC" });
     expect(r.summary).toMatch(/^TEST MODE/);
     const rules = r.tellTheUser.join("\n");

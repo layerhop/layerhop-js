@@ -51,7 +51,7 @@ describe("get_quote", () => {
 
     expect(r.best.quoteId).toBe("q_best");
     expect(r.best.youReceive).toMatchObject({ amount: "0.949742908", minimumAfterSlippage: "0.944994194", token: "SOL", amountBaseUnits: "949742908" });
-    expect(r.best.fees.layerhop).toEqual({ bps: 20, percent: "0.2%", amount: "0.2 USDC" });
+    expect(r.best.fees.layerhop).toEqual({ bps: 10, percent: "0.1%", amount: "0.1 USDC" });
     expect(r.best.fees.providerUsd).toBe(0.12);
     expect(r.best.estimatedTime).toBe("~2 min");
     expect(r.best.expiresInSeconds).toBeGreaterThan(0);

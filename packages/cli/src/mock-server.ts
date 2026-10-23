@@ -412,7 +412,7 @@ export async function startMockServer(opts: MockServerOptions = {}): Promise<Moc
         quoteId: "q_mock_sample", status: type.startsWith("order.") ? type.slice(6) : "filled", statusDetail: null, provider: "mock", channel: "api",
         srcChainId: 8453, srcToken: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", dstChainId: SOLANA_CHAIN_ID, dstToken: SOL_NATIVE,
         sender: "0x1111111111111111111111111111111111111111", recipient: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
-        amount: "100000000", dstAmount: "665333333", ourFeeBps: 20, partnerFeeBps: 0, srcTxHash: `0x${hex("sample-src")}`, dstTxHash: null, livemode: false,
+        amount: "100000000", dstAmount: "666000000", ourFeeBps: 10, partnerFeeBps: 0, srcTxHash: `0x${hex("sample-src")}`, dstTxHash: null, livemode: false,
         createdAt: new Date(now()).toISOString(), updatedAt: new Date(now()).toISOString(),
       };
       const r = sendEvent(type, type.startsWith("order.") ? { order: sample } : {}, true);

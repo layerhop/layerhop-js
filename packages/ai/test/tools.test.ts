@@ -63,7 +63,7 @@ describe("get_quote", () => {
     expect(q.get("integratorFeeBps")).toBe("25");
     const d = (r as { data: any }).data;
     expect(d.best.youReceive).toMatchObject({ amount: "0.949742908", token: "SOL" });
-    expect(d.best.fees.layerhop).toEqual({ bps: 20, percent: "0.2%", amount: "0.2 USDC" });
+    expect(d.best.fees.layerhop).toEqual({ bps: 10, percent: "0.1%", amount: "0.1 USDC" });
     expect(d.swapLink).toContain("integrator=myagent");
   });
 
