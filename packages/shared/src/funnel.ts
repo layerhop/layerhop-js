@@ -35,6 +35,19 @@ export const isFunnelEvent = (v: unknown): v is FunnelEvent => typeof v === "str
 export const USD_BUCKETS = ["<10", "10-100", "100-1k", "1k-10k", "10k+"] as const;
 export type UsdBucket = (typeof USD_BUCKETS)[number];
 
+/** Coarse minimum of a route reported with AMOUNT_TOO_SMALL (funnel `min_usd_bucket`). */
+export const MIN_USD_BUCKETS = ["<5", "5-10", "10-25", "25-50", "50+"] as const;
+export type MinUsdBucket = (typeof MIN_USD_BUCKETS)[number];
+
+export function minUsdBucket(usd: number | undefined): MinUsdBucket | undefined {
+  if (usd === undefined || !Number.isFinite(usd) || usd < 0) return undefined;
+  if (usd < 5) return "<5";
+  if (usd < 10) return "5-10";
+  if (usd < 25) return "10-25";
+  if (usd < 50) return "25-50";
+  return "50+";
+}
+
 export function usdBucket(usd: number | undefined): UsdBucket | undefined {
   if (usd === undefined || !Number.isFinite(usd) || usd < 0) return undefined;
   if (usd < 10) return "<10";
@@ -81,6 +94,8 @@ export const FUNNEL_PROPS = {
   /** Which signature a `tx_sign_requested` asks for. */
   step: oneOf(["approve", "swap"]),
   usd_bucket: oneOf(USD_BUCKETS),
+  /** Coarse route minimum on an `AMOUNT_TOO_SMALL` quote_error (D-036). */
+  min_usd_bucket: oneOf(MIN_USD_BUCKETS),
   /** The page was opened from a prefilled swap link. */
   from_link: bool,
   /** Fee channel of the page (`web`, or `bot` for Telegram deep links). */

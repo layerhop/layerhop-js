@@ -1,4 +1,5 @@
 import type { ChainId, ProviderId, Vm } from "./types.js";
+import type { ChainRouteHealth } from "./route-health.js";
 
 /**
  * Asset registry contract (docs/ASSETS_SPEC.md): what `GET /v1/chains`, `/v1/tokens`,
@@ -36,6 +37,12 @@ export interface ChainInfo {
    * UNSUPPORTED_CHAIN; apps should offer to switch the source instead.
    */
   onlyRoute?: OnlyRoute;
+  /**
+   * Result of the periodic route probes (D-036). Absent until the chain has been checked (or when the
+   * API runs without route health). `status: "unavailable"` chains stay listed so developers can see
+   * why; LayerHop's own apps hide them from pickers.
+   */
+  routeHealth?: ChainRouteHealth;
 }
 
 /** The single route into a route-restricted chain. */

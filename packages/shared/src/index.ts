@@ -21,3 +21,4 @@ export * from "./price-check.js";
 export * from "./hyperliquid-referral.js";
 export * from "./plans.js";
 export * from "./reported-tx.js";
+export * from "./route-health.js";

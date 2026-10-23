@@ -6,7 +6,20 @@ import type {
 export type {
   BuiltTx, EvmTx, EvmCall, SvmTx, OrderStatus, ProviderId, FeeChannel, FeeBreakdown, GasOnArrival,
   ChainInfo, OnlyRoute, TokenInfo, Balance, TokensResponse, PricesResponse, BalancesResponse,
+  ChainRouteHealth, RouteHealthState, RouteHealthStatus,
 } from "@layerhop/shared";
+
+/**
+ * `error.details` of `AMOUNT_TOO_SMALL` from a quote (D-036): the route's minimum when LayerHop could
+ * tell it. `minAmountApprox: true` = found by probing $10 / $25 / $50 (the true minimum is at most this).
+ */
+export interface AmountTooSmallDetails {
+  errors?: { provider: string; code: string; message: string }[];
+  /** Base units of `srcToken`. */
+  minAmount?: string;
+  minAmountUsd?: number;
+  minAmountApprox?: boolean;
+}
 export {
   CHAINS, TOKENS, getChain, findToken, SOLANA_CHAIN_ID, EVM_NATIVE, SOL_NATIVE, HYPERLIQUID_CHAIN_ID,
   gasOnArrivalApplies, DEFAULT_GAS_ON_ARRIVAL_USD,
