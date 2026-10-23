@@ -5,7 +5,7 @@ import type {
 
 export type {
   BuiltTx, EvmTx, EvmCall, SvmTx, OrderStatus, ProviderId, FeeChannel, FeeBreakdown, GasOnArrival,
-  ChainInfo, TokenInfo, Balance, TokensResponse, PricesResponse, BalancesResponse,
+  ChainInfo, OnlyRoute, TokenInfo, Balance, TokensResponse, PricesResponse, BalancesResponse,
 } from "@layerhop/shared";
 export {
   CHAINS, TOKENS, getChain, findToken, SOLANA_CHAIN_ID, EVM_NATIVE, SOL_NATIVE, HYPERLIQUID_CHAIN_ID,

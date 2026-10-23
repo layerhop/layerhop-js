@@ -1,4 +1,4 @@
-import type { ChainInfo } from "./assets.js";
+import type { ChainInfo, OnlyRoute } from "./assets.js";
 import { CHAIN_DATA } from "./chains.data.js";
 import type { ChainId, ProviderId, Vm } from "./types.js";
 
@@ -39,10 +39,44 @@ export function isDestinationOnly(chainId: ChainId): boolean {
   return DESTINATION_ONLY_CHAIN_IDS.has(chainId);
 }
 
+export const BLAST_CHAIN_ID = 81457;
+
+/**
+ * Providers that serve only one fixed route into a chain (D-035). A chain whose providers are ALL
+ * listed here for it is destination-only and carries `onlyRoute` (computed by the API's chain
+ * registry, so it lifts automatically if an aggregator lists the chain again).
+ */
+export const PROVIDER_ROUTE_RESTRICTIONS: Partial<Record<ProviderId, Readonly<Record<ChainId, OnlyRoute>>>> = {
+  "blast-native": {
+    [BLAST_CHAIN_ID]: {
+      srcChainId: 1,
+      srcToken: "0x0000000000000000000000000000000000000000",
+      dstToken: "0x0000000000000000000000000000000000000000",
+    },
+  },
+};
+
+/** The fixed route into `chainId` when every one of `providers` is restricted to it there. */
+export function onlyRouteFor(chainId: ChainId, providers: readonly ProviderId[]): OnlyRoute | undefined {
+  if (providers.length === 0) return undefined;
+  let route: OnlyRoute | undefined;
+  for (const p of providers) {
+    const r = PROVIDER_ROUTE_RESTRICTIONS[p]?.[chainId];
+    if (!r) return undefined;
+    route ??= r;
+  }
+  return route;
+}
+
+/** Whether a source chain/token pair and destination token match a chain's `onlyRoute`. */
+export function matchesOnlyRoute(route: OnlyRoute, srcChainId: ChainId, srcToken: string, dstToken: string): boolean {
+  return route.srcChainId === srcChainId && route.srcToken.toLowerCase() === srcToken.toLowerCase() && route.dstToken.toLowerCase() === dstToken.toLowerCase();
+}
+
 /**
  * Static chain registry: every chain at least one of our providers listed when it was last
  * generated (`pnpm --filter @layerhop/api gen:chains`, see docs/ASSETS_SPEC.md). The API
- * refreshes this live every 6 h; this list is the offline fallback. The original seven chains
+ * refreshes this live every hour; this list is the offline fallback. The original seven chains
  * come first, in their historical order.
  */
 export const CHAINS: readonly ChainInfo[] = CHAIN_DATA;

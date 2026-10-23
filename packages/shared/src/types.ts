@@ -1,7 +1,7 @@
 export type ChainId = number;
 export type Vm = "evm" | "svm";
 
-export type ProviderId = "jupiter" | "relay" | "debridge" | "mayan" | "zerox" | "kyberswap" | "odos" | "lifi" | "mock" | "sandbox" | "direct";
+export type ProviderId = "jupiter" | "relay" | "debridge" | "mayan" | "zerox" | "kyberswap" | "odos" | "lifi" | "blast-native" | "mock" | "sandbox" | "direct";
 
 /** Where the trade came from — decides our fee (see docs/BOOTSTRAP_PLAN.md). */
 export type FeeChannel = "web" | "widget" | "bot" | "api";
@@ -174,7 +174,11 @@ export interface ProviderContext {
   fetch: typeof fetch;
   signal?: AbortSignal;
   /** RPC endpoints for providers that build txs client-side (e.g. Mayan's Solana path needs a blockhash + account reads). */
-  rpc?: { solana?: string };
+  rpc?: {
+    solana?: string;
+    /** RPC_URL_<chainId> overrides for EVM reads (e.g. blast-native status checks L1 and Blast receipts). */
+    env?: Record<string, string | undefined>;
+  };
   /**
    * D-030 positive-slippage capture (POSITIVE_SLIPPAGE_CAPTURE=1, default off). When set, providers with an
    * official surplus-recipient parameter send surplus above the quoted output to `feeRecipients`, capped at
