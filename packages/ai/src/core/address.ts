@@ -1,6 +1,6 @@
 /** Address validation per VM. Pure functions, no chain access. */
 
-export type Vm = "evm" | "svm";
+export type Vm = "evm" | "svm" | "tvm";
 
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -35,17 +35,26 @@ export function isSolanaAddress(a: string): boolean {
   return base58Decode(a)?.length === 32;
 }
 
+/** A Tron address is base58check of 25 bytes starting with 0x41 (so it starts with "T"). */
+export function isTronAddress(a: string): boolean {
+  if (a.length !== 34 || a[0] !== "T") return false;
+  const b = base58Decode(a);
+  return b?.length === 25 && b[0] === 0x41;
+}
+
 export function isValidAddress(vm: Vm, a: string): boolean {
-  return vm === "evm" ? isEvmAddress(a) : isSolanaAddress(a);
+  return vm === "evm" ? isEvmAddress(a) : vm === "tvm" ? isTronAddress(a) : isSolanaAddress(a);
 }
 
 export function vmOfAddress(a: string): Vm | undefined {
   if (isEvmAddress(a)) return "evm";
+  if (isTronAddress(a)) return "tvm";
   if (isSolanaAddress(a)) return "svm";
   return undefined;
 }
 
 export function describeVm(vm: Vm): string {
+  if (vm === "tvm") return "a Tron address (base58, starts with T)";
   return vm === "evm" ? "an EVM address (0x followed by 40 hex characters)" : "a Solana address (base58 public key)";
 }
 

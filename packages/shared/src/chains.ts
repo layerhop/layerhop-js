@@ -23,6 +23,36 @@ export interface Chain {
 export const SOLANA_CHAIN_ID = 7565164;
 
 /**
+ * Tron (D-048). Its EVM-style chain id (0x2b6653dc), the id Relay uses too. Tron is built but OFF:
+ * the API lists and quotes it only with TRON_ENABLED=1. So TRON_CHAIN is not part of CHAINS (the
+ * static registry marketing pages and pickers list and count). `getChain` does resolve it, so
+ * lookups by id (VM, explorer links, decimals) work wherever a Tron order or tx shows up.
+ */
+export const TRON_CHAIN_ID = 728126428;
+
+/** Tron's registry entry, served by GET /v1/chains when TRON_ENABLED=1. */
+export const TRON_CHAIN: ChainInfo = {
+  id: TRON_CHAIN_ID,
+  slug: "tron",
+  name: "Tron",
+  vm: "tvm",
+  nativeSymbol: "TRX",
+  nativeDecimals: 6,
+  logoURI: "https://assets.relay.link/icons/728126428/light.png",
+  explorerTx: "https://tronscan.org/#/transaction/",
+  explorerAddress: "https://tronscan.org/#/address/",
+  providers: ["relay"],
+  popular: false,
+};
+
+/** Chains that are built but stay off until their flag is set (Tron: TRON_ENABLED). */
+export const FLAGGED_CHAINS: readonly ChainInfo[] = [TRON_CHAIN];
+
+export function isTronChain(chainId: ChainId): boolean {
+  return chainId === TRON_CHAIN_ID;
+}
+
+/**
  * Hyperliquid (HyperCore: the perps/spot exchange, not HyperEVM 999). Relay's id, used as ours.
  * Accounts are 0x addresses, so it is treated as an EVM-style chain; it is a destination only
  * (withdrawals need Hyperliquid-signed actions we don't build). Its "native" coin is the perps USDC
@@ -84,8 +114,19 @@ export const CHAINS: readonly ChainInfo[] = CHAIN_DATA;
 /** Chain ids shown first in pickers (docs/ASSETS_SPEC.md). */
 export const POPULAR_CHAIN_IDS: readonly ChainId[] = [1, 8453, 42161, SOLANA_CHAIN_ID, 56, 10, 137, 43114, 80094, 999, 146];
 
+const chainMatch = (idOrSlug: ChainId | string) => (c: ChainInfo) => c.id === Number(idOrSlug) || c.slug === String(idOrSlug).toLowerCase();
+
+/** A public chain by id or slug. Clients parse user input with this, so flagged chains never resolve there. */
 export function getChain(idOrSlug: ChainId | string): ChainInfo | undefined {
-  return CHAINS.find((c) => c.id === Number(idOrSlug) || c.slug === String(idOrSlug).toLowerCase());
+  return CHAINS.find(chainMatch(idOrSlug));
+}
+
+/**
+ * CHAINS, then FLAGGED_CHAINS (Tron). Server code only: the API and worker gate flagged chains by their
+ * flag (TRON_ENABLED) before they reach this.
+ */
+export function getAnyChain(idOrSlug: ChainId | string): ChainInfo | undefined {
+  return getChain(idOrSlug) ?? FLAGGED_CHAINS.find(chainMatch(idOrSlug));
 }
 
 export function isSameChain(a: ChainId, b: ChainId): boolean {

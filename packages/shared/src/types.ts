@@ -1,7 +1,10 @@
 export type ChainId = number;
-export type Vm = "evm" | "svm";
+/** Virtual machine family: EVM chains, Solana (`svm`) and Tron (`tvm`, D-048; behind TRON_ENABLED). */
+export type Vm = "evm" | "svm" | "tvm";
+/** VMs whose wallet signatures LayerHop verifies (sign-in, scam reports, trade feed opt-in). Not Tron yet. */
+export type WalletVm = Exclude<Vm, "tvm">;
 
-export type ProviderId = "jupiter" | "relay" | "debridge" | "mayan" | "zerox" | "kyberswap" | "odos" | "lifi" | "blast-native" | "mock" | "sandbox" | "direct";
+export type ProviderId = "jupiter" | "relay" | "debridge" | "mayan" | "zerox" | "kyberswap" | "odos" | "lifi" | "blast-native" | "across" | "mock" | "sandbox" | "direct";
 
 /** Where the trade came from — decides our fee (see docs/BOOTSTRAP_PLAN.md). */
 export type FeeChannel = "web" | "widget" | "bot" | "api";
@@ -33,6 +36,51 @@ export interface QuoteRequest {
    * providers with `destinationCalls` quote such requests; always paired with `EXACT_OUTPUT`.
    */
   calls?: EvmCall[];
+  /**
+   * Gasless (D-043): the user signs EIP-712 typed data instead of sending a transaction, and the
+   * provider's relayer pays the network fee out of `srcToken`. Only providers with `gasless` quote
+   * such requests (EVM same-chain, ERC-20 input).
+   */
+  gasless?: boolean;
+}
+
+/** EIP-712 typed data exactly as a provider returned it (sign it unchanged with `eth_signTypedData_v4`). */
+export interface Eip712TypedData {
+  types: Record<string, { name: string; type: string }[]>;
+  domain: Record<string, unknown>;
+  message: Record<string, unknown>;
+  primaryType: string;
+}
+
+/** One typed-data payload of a gasless order, with the provider's label for it. */
+export interface GaslessSignable {
+  /** Provider's kind, e.g. 0x `permit` / `executeMetaTransaction::approve` / `settler_metatransaction`. */
+  type: string;
+  eip712: Eip712TypedData;
+}
+
+/** What the wallet signs for a gasless quote (D-043). No transaction is sent by the user. */
+export interface GaslessSignRequest {
+  chainId: ChainId;
+  /** Gasless token approval (EIP-2612 permit or meta-tx approve), signed first. Absent when the allowance is already set. */
+  approval?: GaslessSignable;
+  trade: GaslessSignable;
+  /** Network fee the relayer takes from the input token (base units of `token`). */
+  gasFee?: { amount: string; token: string };
+}
+
+/** Wallet signatures for a gasless order: 65-byte hex `0x{r}{s}{v}` from `eth_signTypedData_v4`. */
+export interface GaslessSignatures {
+  trade: string;
+  approval?: string;
+}
+
+/** A gasless order's state at the provider; `srcTxHash` once the relayer broadcast it. */
+export interface GaslessStatus {
+  state: OrderState;
+  srcTxHash?: string;
+  /** Provider's failure reason, e.g. `order_expired`. */
+  reason?: string;
 }
 
 export type TradeType = "EXACT_INPUT" | "EXACT_OUTPUT";
@@ -119,7 +167,72 @@ export type SvmTx = {
   sandbox?: true;
 };
 
-export type BuiltTx = EvmTx | SvmTx;
+/**
+ * One Tron smart-contract call (a `TriggerSmartContract`), as the wallet sends it. Addresses are
+ * base58check T-addresses; amounts are integer strings in sun (1 TRX = 1,000,000 sun).
+ */
+export interface TronCall {
+  /** Contract called (T-address). */
+  to: string;
+  /** ABI calldata, `0x` hex (4-byte selector + arguments). */
+  data: string;
+  /** TRX sent with the call, sun. */
+  value: string;
+  /**
+   * Most TRX the network may burn for this call's energy, sun (`fee_limit`). Computed from a
+   * simulation when one succeeded, else a conservative default. Unused TRX is not burned.
+   */
+  feeLimit: string;
+}
+
+/**
+ * An unsigned Tron transaction exactly as the node built it (TronWeb's transaction object). Sign it
+ * unchanged (`tronWeb.trx.sign(tx)` / TronLink) and broadcast; it expires at `raw_data.expiration`.
+ */
+export interface TronUnsignedTx {
+  /** sha256 of `raw_data_hex`, hex without 0x (the tx hash once broadcast). */
+  txID: string;
+  /** Protobuf-encoded raw transaction, hex. This is what gets signed. */
+  raw_data_hex: string;
+  /** Decoded `raw_data` (contract, ref block, expiration, fee_limit). */
+  raw_data: Record<string, unknown>;
+  visible?: boolean;
+}
+
+/** A TRC-20 approval the Tron wallet must send before the main call (a separate transaction). */
+export interface TronApproval {
+  /** TRC-20 token (T-address). */
+  token: string;
+  /** Spender (T-address). */
+  spender: string;
+  /** Allowance granted, base units. */
+  amount: string;
+  /** The `approve` call itself. */
+  call: TronCall;
+  /** Prebuilt unsigned tx for `call` (set by buildTx; absent on quotes). */
+  unsigned?: TronUnsignedTx;
+}
+
+/**
+ * Tron transaction(s) for a quote (D-048). The wallet sends `approval` first when present, then the
+ * main call. Each call is also given prebuilt (`unsigned`) by `POST /v1/orders`; a wallet may
+ * instead rebuild from `call` with its own node (fresh reference block), the result is equivalent.
+ */
+export type TronTx = {
+  vm: "tvm";
+  chainId: ChainId;
+  /** Owner (signer) of every call, T-address. */
+  from: string;
+  /** The main call (Relay: the deposit into its depository). */
+  call: TronCall;
+  /** Prebuilt unsigned tx for `call` (set by buildTx). */
+  unsigned?: TronUnsignedTx;
+  approval?: TronApproval;
+  /** Test mode only: a placeholder that moves no funds. Never broadcast it. */
+  sandbox?: true;
+};
+
+export type BuiltTx = EvmTx | SvmTx | TronTx;
 
 export interface ProviderQuote {
   provider: ProviderId;
@@ -140,11 +253,23 @@ export interface ProviderQuote {
   calls?: DestinationCallsPlan;
   /** Some providers return the transaction together with the quote. */
   tx?: BuiltTx;
+  /**
+   * The provider's id for tracking this order when its status API can't find it by the source tx
+   * hash (Relay requestId on Tron-source routes, D-048). Stored on the order (`providerRef`) and
+   * passed to `status()` instead of the hash.
+   */
+  orderRef?: string;
+  /** Gasless quotes (request.gasless): typed data to sign instead of `tx`. */
+  gasless?: GaslessSignRequest;
   /** Provider-specific data needed by buildTx / status (never sent to clients). */
   raw?: unknown;
 }
 
-export type OrderState = "pending" | "filled" | "refunded" | "failed" | "unknown";
+/**
+ * `dropped` (D-051) is never reported by a provider: the API answers it for a LayerHop order whose
+ * source transaction never reached the network (the worker marked the order `dropped`).
+ */
+export type OrderState = "pending" | "filled" | "refunded" | "failed" | "unknown" | "dropped";
 
 export interface OrderStatus {
   provider: ProviderId;
@@ -155,8 +280,10 @@ export interface OrderStatus {
 }
 
 export interface FeeRecipients {
-  evm?: string; // EVM address receiving our fees (0x, KyberSwap, Relay, deBridge EVM, LI.FI)
+  evm?: string; // EVM address receiving our fees (0x, KyberSwap, Relay, deBridge EVM, LI.FI, Across)
   svm?: string; // Solana address receiving our fees (deBridge Solana, Mayan)
+  /** Tron T-address receiving our fees (FEE_RECIPIENT_TVM): deBridge on a Tron source (D-048). Unset: deBridge never quotes Tron. */
+  tvm?: string;
   jupiterReferralAccount?: string; // Jupiter Ultra-project referral account, used by the /order path (min 50 bps)
   /** mint → token account for Jupiter /build platform fees (any bps, no Jupiter cut). Preferred when set. */
   jupiterFeeAccounts?: Record<string, string>;
@@ -178,6 +305,8 @@ export interface ProviderContext {
     solana?: string;
     /** RPC_URL_<chainId> overrides for EVM reads (e.g. blast-native status checks L1 and Blast receipts). */
     env?: Record<string, string | undefined>;
+    /** Tron node HTTP API (TronGrid), for providers that build Tron txs (D-048). */
+    tron?: TronApiConfig;
   };
   /**
    * D-030 positive-slippage capture (POSITIVE_SLIPPAGE_CAPTURE=1, default off). When set, providers with an
@@ -185,6 +314,12 @@ export interface ProviderContext {
    * `maxBps` of the quoted output. Absent = off: the user keeps whatever the provider gives them.
    */
   surplusCapture?: { maxBps: number };
+}
+
+/** A Tron full-node HTTP API (TronGrid by default) and its optional `TRON-PRO-API-KEY`. */
+export interface TronApiConfig {
+  url: string;
+  apiKey?: string;
 }
 
 /** Every liquidity source (partner today, our own solver later) implements this. */
@@ -204,6 +339,15 @@ export interface RouteProvider {
   status(id: string, ctx: ProviderContext): Promise<OrderStatus>;
   /** Only for providers whose txs set `submitViaApi`: forward a user-signed tx (base64). */
   submit?(quote: ProviderQuote, signedTx: string, ctx: ProviderContext): Promise<{ txHash: string }>;
+  /**
+   * Quotes `request.gasless` (D-043): the quote carries `gasless` typed data instead of `tx`.
+   * Providers without it are skipped for gasless requests.
+   */
+  readonly gasless?: boolean;
+  /** Gasless: relay the wallet's signatures. Returns the provider's order id (0x: the trade hash). */
+  submitGasless?(quote: ProviderQuote, sigs: GaslessSignatures, ctx: ProviderContext): Promise<{ orderId: string }>;
+  /** Gasless: the order's state by provider order id. */
+  gaslessStatus?(quote: ProviderQuote, orderId: string, ctx: ProviderContext): Promise<GaslessStatus>;
 }
 
 /** A deposit address request (D-024): the end user sends `srcToken`, the provider delivers `dstToken`. */

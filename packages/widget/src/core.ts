@@ -11,7 +11,7 @@ export const DEFAULT_BASE_URL = "https://layerhop.com";
 export const DEFAULT_HEIGHT = 640;
 export const DEFAULT_MAX_WIDTH = 480;
 /** color-scheme for the iframe element; equals the embed document's root (see mount()). */
-export const EMBED_COLOR_SCHEME = "normal";
+export const EMBED_COLOR_SCHEME = "light";
 
 // ---------------------------------------------------------------------------------------------
 // Options
@@ -154,7 +154,7 @@ export interface SubmittedEvent {
   srcChainId: number;
   srcTxHash: string;
 }
-export type OrderState = "pending" | "filled" | "refunded" | "failed";
+export type OrderState = "pending" | "filled" | "refunded" | "failed" | "dropped";
 export interface StatusEvent {
   provider: string;
   srcTxHash: string;

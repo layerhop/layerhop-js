@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FUNNEL_EVENTS, FUNNEL_STEPS, isFunnelEntry, isFunnelEvent, sanitizeFunnelProps, usdBucket } from "./funnel.js";
+import { FUNNEL_EVENTS, FUNNEL_STEPS, SWAP_VIA, funnelWalletName, isFunnelEntry, isFunnelEvent, isSwapVia, sanitizeFunnelProps, usdBucket } from "./funnel.js";
 
 describe("funnel allowlists", () => {
   it("knows its events, steps first", () => {
@@ -44,6 +44,46 @@ describe("funnel allowlists", () => {
     expect(FUNNEL_STEPS).not.toContain("cta_clicked");
     expect(sanitizeFunnelProps({ cta: "signup", entry: "pay:crypto-donations" })).toEqual({ cta: "signup", entry: "pay:crypto-donations" });
     expect(sanitizeFunnelProps({ cta: "https://evil.example" })).toEqual({});
+  });
+
+  it("allows entry classification, device and wallet context on page_view (bounded)", () => {
+    expect(sanitizeFunnelProps({
+      entry_source: "internal:copy", referrer_host: "t.co", device: "mobile", in_app_browser: "telegram",
+      wallet_detected_evm: true, wallet_detected_svm: false, src_token: "USDC", dst_token: "SOL", src_chain: "base", dst_chain: "solana",
+    })).toEqual({
+      entry_source: "internal:copy", referrer_host: "t.co", device: "mobile", in_app_browser: "telegram",
+      wallet_detected_evm: true, wallet_detected_svm: false, src_token: "USDC", dst_token: "SOL", src_chain: "base", dst_chain: "solana",
+    });
+    expect(sanitizeFunnelProps({ entry_source: "external_link" })).toEqual({ entry_source: "external_link" });
+    expect(sanitizeFunnelProps({ entry_source: "direct" })).toEqual({ entry_source: "direct" });
+    for (const bad of ["internal:", "internal:evil", "internal:copy ", "https://x.com", "external"]) expect(sanitizeFunnelProps({ entry_source: bad }), bad).toEqual({});
+    for (const bad of ["https://t.co/abc", "t.co/abc", "T.CO", "a".repeat(65), "x.com?q=1", "user@x.com", ""]) expect(sanitizeFunnelProps({ referrer_host: bad }), bad).toEqual({});
+    expect(sanitizeFunnelProps({ device: "phone", in_app_browser: "Telegram", wallet_detected_evm: "yes" })).toEqual({});
+    expect(SWAP_VIA).toContain("copy");
+    expect(isSwapVia("home")).toBe(true);
+    expect(isSwapVia("toString")).toBe(false);
+  });
+
+  it("allows wallet names on wallet / tx events, never address-shaped ones", () => {
+    expect(sanitizeFunnelProps({ wallet: "MetaMask", vm: "evm" })).toEqual({ wallet: "MetaMask", vm: "evm" });
+    expect(sanitizeFunnelProps({ wallet: "Coinbase Wallet" })).toEqual({ wallet: "Coinbase Wallet" });
+    for (const bad of ["0xAbC0000000000000000000000000000000000001", "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM", "", " x", "a".repeat(33), "<script>"]) {
+      expect(sanitizeFunnelProps({ wallet: bad }), bad).toEqual({});
+    }
+    expect(funnelWalletName("  Phantom ")).toBe("Phantom");
+    expect(funnelWalletName("Trust Wallet™")).toBe("Trust Wallet");
+    expect(funnelWalletName("OKX Wallet: 0xAbC0000000000000000000000000000000000001")).toBeUndefined();
+    expect(funnelWalletName(undefined)).toBeUndefined();
+    expect(funnelWalletName("My Wallet Name Is Very Long Indeed Yes")).toBe("My Wallet Name Is Very Long Inde");
+  });
+
+  it("allows page_leave with the last step and client times since load", () => {
+    expect(isFunnelEvent("page_leave")).toBe(true);
+    expect(FUNNEL_STEPS).not.toContain("page_leave");
+    expect(sanitizeFunnelProps({ last_step: "quote_shown", t_ms: 12_345 })).toEqual({ last_step: "quote_shown", t_ms: 12_345 });
+    expect(sanitizeFunnelProps({ last_step: "page_leave", t_ms: -1 })).toEqual({});
+    expect(sanitizeFunnelProps({ t_ms: 1.5 })).toEqual({});
+    expect(sanitizeFunnelProps({ t_ms: 8 * 86_400_000 })).toEqual({});
   });
 
   it("buckets USD amounts coarsely", () => {

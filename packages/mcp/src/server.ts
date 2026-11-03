@@ -20,9 +20,10 @@ import {
   type TokenLookup,
 } from "./format.js";
 import { buildSwapLink } from "./links.js";
+import { apiErrorText, createResolvers, explainQuoteError, formatGaslessBuild, formatLimitOrder, formatTokenRisk } from "@layerhop/ai/core";
 
 export const PROVIDERS = ["jupiter", "relay", "debridge", "mayan", "zerox", "kyberswap", "odos", "lifi", "mock"] as const satisfies readonly ProviderId[];
-export const ORDER_STATUSES = ["built", "submitted", "pending", "filled", "refunded", "failed", "expired"] as const;
+export const ORDER_STATUSES = ["built", "submitted", "pending", "filled", "refunded", "failed", "expired", "dropped"] as const;
 
 const NO_KEYS =
   "The LayerHop MCP server holds no private keys and never signs or broadcasts transactions.";
@@ -32,6 +33,10 @@ export const SERVER_INSTRUCTIONS = `LayerHop finds the best-priced route for cro
 Amounts in tool inputs are HUMAN decimal strings in the token's own units ("100" = 100 USDC, "0.05" = 0.05 ETH), never base units. Outputs show human amounts; fields named *BaseUnits are integers in the token's smallest unit.
 
 Safe workflow: list_chains / list_tokens if unsure -> get_quote -> show the user output, minimum received, every fee and the ETA -> get explicit confirmation -> prefer giving the user the swapLink (or get_swap_link) so they review and sign in their own wallet on layerhop.com. Only use build_transaction when the user has their own signer and asks for raw transaction data; never ask for or accept private keys or seed phrases.
+
+Before a user buys or receives a token that is unverified or unfamiliar, call get_token_risk and show any caution or danger reasons. When get_quote fails with NO_ROUTE, the error may list alternatives that do quote (another destination or source token, or two steps through a hub): offer them, never switch silently. Gasless quotes (typed data) and Tron transactions can't be signed or completed through this server: give the user the swap link.
+
+Solana limit orders (create_limit_order and friends) return UNSIGNED transactions: only the maker's own wallet signs them; submit_limit_order only relays an already-signed transaction.
 
 Deposit addresses (create_deposit_address and friends, API key required) let a user swap or bridge by just sending a token to an address. When you show one, always tell the user: send ONLY that token on that chain (anything else may be lost), at least $1 worth, and refunds go to refundTo, which must be their own address, never an exchange deposit address. Test-key addresses are fake: never send real funds; use simulate_deposit.`;
 
@@ -83,11 +88,7 @@ async function run(fn: () => Promise<unknown>): Promise<CallToolResult> {
   try {
     return ok(await fn());
   } catch (e) {
-    if (e instanceof LayerHopApiError) {
-      return fail(
-        `LayerHop API error ${e.code} (HTTP ${e.status}): ${e.message}${e.requestId ? ` [requestId ${e.requestId}]` : ""}. See https://docs.layerhop.com/errors/${e.code}`,
-      );
-    }
+    if (e instanceof LayerHopApiError) return fail(apiErrorText(e));
     if (e instanceof EndpointUnavailableError) return fail(e.message);
     if (e instanceof AmountError || e instanceof UserInputError) return fail(e.message);
     return fail(e instanceof Error ? e.message : String(e));
@@ -231,6 +232,12 @@ export function buildServer(opts: InternalServerOptions): McpServer {
         slippageBps: slippageSchema,
         fromTokenDecimals: decimalsSchema("fromToken"),
         toTokenDecimals: decimalsSchema("toToken"),
+        gasless: z
+          .boolean()
+          .optional()
+          .describe(
+            "Optional gasless swap (same EVM chain, ERC-20 input, where the API enables it): the user signs EIP-712 typed data instead of a transaction and the network fee is taken from fromToken. This server cannot sign or submit typed data for the user, so the user finishes it via the swap link or their own app.",
+          ),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -257,16 +264,21 @@ export function buildServer(opts: InternalServerOptions): McpServer {
         const amount = fromBaseUnits(amountBaseUnits, srcToken.decimals);
         const slippageBps = a.slippageBps ?? 50;
 
-        const r = await client.quote({
-          srcChain: src.id,
-          srcToken: srcToken.address,
-          amount: amountBaseUnits,
-          dstChain: dst.id,
-          dstToken: dstToken.address,
-          sender,
-          recipient,
-          slippageBps,
-        });
+        const r = await client
+          .quote({
+            srcChain: src.id,
+            srcToken: srcToken.address,
+            amount: amountBaseUnits,
+            dstChain: dst.id,
+            dstToken: dstToken.address,
+            sender,
+            recipient,
+            slippageBps,
+            ...(a.gasless ? { gasless: true } : {}),
+          })
+          .catch(async (e: unknown) => {
+            throw await explainQuoteError(e, client, { srcDecimals: srcToken.decimals, srcSymbol: srcToken.symbol });
+          });
         const base = { srcChain: src, dstChain: dst, srcToken, dstToken, amount, amountBaseUnits, sender, recipient, slippageBps };
         for (const q of r.quotes.length ? r.quotes : [r.best]) {
           quotes.set({ ...base, quoteId: q.quoteId, provider: q.provider, expiresAt: q.expiresAt });
@@ -299,6 +311,10 @@ export function buildServer(opts: InternalServerOptions): McpServer {
     ({ quoteId }) =>
       run(async () => {
         const [built, chains] = await Promise.all([client.buildOrder(quoteId), client.chains()]);
+        if (!built.tx) {
+          if (built.gasless) return formatGaslessBuild(built.gasless, built.provider, quoteId, quotes.get(quoteId), { holder: "The LayerHop MCP server" });
+          throw new UserInputError(`The API returned no transaction for quote ${quoteId}. Get a fresh quote with get_quote.`);
+        }
         return formatBuiltTx(built.tx, built.provider, quoteId, quotes.get(quoteId), chainNameById(chains), config.apiUrl);
       }),
   );
@@ -319,7 +335,7 @@ export function buildServer(opts: InternalServerOptions): McpServer {
           return {
             ...rest,
             summary: r.ok
-              ? `Simulation succeeded${r.gasEstimate !== undefined ? `, estimated gas ${r.gasEstimate}` : ""}${r.computeUnits !== undefined ? `, ${r.computeUnits} compute units` : ""}${r.needsApproval ? ". An ERC-20 approval is still needed before the swap (only the approval was simulated)." : "."}`
+              ? `Simulation succeeded${r.gasEstimate !== undefined ? `, estimated gas ${r.gasEstimate}` : ""}${r.computeUnits !== undefined ? `, ${r.computeUnits} compute units` : ""}${r.energyUsed !== undefined ? `, ${r.energyUsed} energy (Tron)` : ""}${r.needsApproval ? ". An ERC-20 approval is still needed before the swap (only the approval was simulated)." : "."}`
               : `Simulation failed: ${r.error?.code ?? "UNKNOWN"} ${r.error?.message ?? ""}`.trim(),
           };
         } catch (e) {
@@ -390,6 +406,7 @@ export function buildServer(opts: InternalServerOptions): McpServer {
           refunded: "The swap did not complete and funds were refunded to the sender.",
           failed: "The swap failed. Check the source transaction on an explorer.",
           unknown: "The provider does not track this tx (common for same-chain swaps). Check the transaction on a block explorer.",
+          dropped: "The source transaction never reached the network; no funds moved. Stop checking and get a new quote.",
         };
         return { ...s, meaning: meaning[s.state] ?? s.state, srcExplorer: explorer(s.srcTxHash), dstExplorer: explorer(s.dstTxHash) };
       }),
@@ -485,6 +502,181 @@ export function buildServer(opts: InternalServerOptions): McpServer {
         return {
           url,
           summary: `Open ${url} to review the live quote and fees and sign with your own wallet.`,
+        };
+      }),
+  );
+
+  // ---------- token lookup and risk ----------
+  const core = createResolvers(client);
+
+  server.registerTool(
+    "lookup_token",
+    {
+      title: "Look up a token by address",
+      description:
+        "Get one token's symbol, name, decimals, USD price and verified flag from its contract address or SPL mint. The chain is optional: LayerHop finds it (Solana for a mint, else the EVM chain where the token has the most liquidity). verified false means it is on no curated list: confirm the address with the user before swapping. Read-only.",
+      inputSchema: {
+        address: z.string().min(1).describe("Token contract address (EVM 0x...) or SPL mint (Solana)."),
+        chain: chainSchema("Optional: the token's").optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    (a) =>
+      run(async () => {
+        const chain = a.chain !== undefined ? await resolveChain(a.chain) : undefined;
+        const tok = await client.lookupToken(a.address.trim(), chain?.id);
+        const chains = await client.chains();
+        return {
+          token: { ...tok, chain: chainNameById(chains)(tok.chainId) },
+          note: tok.verified
+            ? "On a provider or curated list."
+            : "verified false: the token is on no list (read on-chain). Confirm the address with the user and consider get_token_risk before swapping.",
+        };
+      }),
+  );
+
+  server.registerTool(
+    "get_token_risk",
+    {
+      title: "Check a token for risks",
+      description:
+        "Safety report for a token before the user buys or receives it: honeypot (can't sell), buy/sell/transfer taxes, owner powers (mint, blacklist, pause, freeze), unpublished code, few holders, and fake majors (a token calling itself USDC/ETH/SOL at the wrong address). level is ok, caution, danger or unknown (no source answered; never block a swap on unknown alone). On danger, warn the user and get explicit confirmation before get_quote. Read-only.",
+      inputSchema: { chain: chainSchema("The token's"), token: tokenSchema("The token to check: symbol or") },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    (a) =>
+      run(async () => {
+        const c = await resolveChain(a.chain);
+        const tok = await resolveTokenLoose(c, a.token);
+        return formatTokenRisk(await client.tokenRisk(c.id, tok.address), c.name);
+      }),
+  );
+
+  // ---------- Solana limit orders ----------
+  const limitIdSchema = z.string().regex(/^lo_/, "limit order ids start with lo_").describe('Limit order id (starts with "lo_").');
+  const limitSigning = (id: string, what: string) => ({
+    notice: `This is an UNSIGNED Solana transaction (${what}). ${NO_KEYS} Only the maker's own wallet may sign it, after the user confirmed.`,
+    steps: [
+      "Step 1: deserialize serializedTx (base64) as a Solana VersionedTransaction and have the maker's wallet SIGN it (sign only; do not broadcast it, plain RPC will not land it). Do not change it.",
+      `Step 2: call submit_limit_order with id "${id}" and the signed transaction (base64).`,
+    ],
+  });
+  const limitLookup = (chainIds: number[]) => core.tokenLookup(chainIds);
+
+  server.registerTool(
+    "list_limit_orders",
+    {
+      title: "List Solana limit orders",
+      description:
+        "List Solana limit orders (Jupiter Trigger) of a wallet, or of the API key's account without a wallet: what is sold, the minimum received, status (built, open, filled, cancelled, expired, failed) and fills. Read-only.",
+      inputSchema: {
+        wallet: z.string().min(1).optional().describe("Solana wallet (base58) whose limit orders to list. Without it: the API key's account (needs a key)."),
+        status: z.enum(["built", "open", "filled", "cancelled", "expired", "failed"]).optional().describe("Only orders with this status."),
+        limit: z.number().int().min(1).max(100).optional().describe("Max orders to return."),
+        cursor: z.string().optional().describe("nextCursor from a previous call, for the next page."),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    (a) =>
+      run(async () => {
+        if (!a.wallet) requireKey();
+        const r = await client.listLimitOrders({ wallet: a.wallet?.trim(), status: a.status, limit: a.limit, cursor: a.cursor });
+        const lookup = await limitLookup(r.limitOrders.map((o) => o.chainId));
+        return { count: r.limitOrders.length, limitOrders: r.limitOrders.map((o) => formatLimitOrder(o, lookup)), nextCursor: r.nextCursor ?? null };
+      }),
+  );
+
+  server.registerTool(
+    "get_limit_order",
+    {
+      title: "Get a Solana limit order",
+      description: "Get one Solana limit order with its fills (each fill is an order whose quoteId starts with lof_). Read-only.",
+      inputSchema: { id: limitIdSchema },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    ({ id }) =>
+      run(async () => {
+        const o = await client.getLimitOrder(id);
+        return { limitOrder: formatLimitOrder(o, await limitLookup([o.chainId])), fills: o.fills ?? [] };
+      }),
+  );
+
+  server.registerTool(
+    "create_limit_order",
+    {
+      title: "Create a Solana limit order (unsigned)",
+      description: `Build a Solana limit order (Jupiter Trigger): sell sellAmount of sellToken once the market gives at least minReceive of buyToken. Returns the order and its UNSIGNED transaction for the maker's own wallet to sign; then call submit_limit_order. Worth at least $5. LayerHop's fee applies when buyToken is SOL, USDC or USDT. ${NO_KEYS} Confirm the price with the user first.`,
+      inputSchema: {
+        wallet: z.string().min(1).describe("The maker's Solana wallet (base58): signs the order and receives buyToken."),
+        sellToken: tokenSchema("Token to sell (Solana)"),
+        sellAmount: amountSchema.describe('HUMAN units of sellToken to sell, e.g. "50" for 50 USDC.'),
+        buyToken: tokenSchema("Token to buy (Solana)"),
+        minReceive: amountSchema.describe('Minimum HUMAN units of buyToken for the whole sellAmount (the limit price is minReceive / sellAmount), e.g. "0.5" for 0.5 SOL.'),
+        expiresInMinutes: z.number().int().min(1).max(525600).optional().describe("Cancel automatically after this many minutes. Omit for good-till-cancelled."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    (a) =>
+      run(async () => {
+        const sol = await resolveChain("solana");
+        const wallet = a.wallet.trim();
+        assertAddress(sol.vm, wallet, "wallet", sol.name);
+        const [src, dst] = await Promise.all([core.resolveTokenOnline(sol, a.sellToken), core.resolveTokenOnline(sol, a.buyToken)]);
+        const created = await client.createLimitOrder({
+          wallet,
+          srcToken: src.address,
+          dstToken: dst.address,
+          amount: toBaseUnits(a.sellAmount, src.decimals),
+          dstAmount: toBaseUnits(a.minReceive, dst.decimals),
+          ...(a.expiresInMinutes ? { expiresAt: Math.floor(Date.now() / 1000) + a.expiresInMinutes * 60 } : {}),
+        });
+        const lookup = await limitLookup([created.chainId]);
+        const { tx, ...order } = created;
+        return {
+          limitOrder: formatLimitOrder(order, (c, addr) => lookup(c, addr) ?? (addr === src.address ? src : addr === dst.address ? dst : undefined)),
+          unsignedTransaction: { vm: "svm", serializedTx: tx.serializedTx, encoding: "base64", submitViaApi: true, ...(tx.sandbox ? { sandbox: true } : {}) },
+          signing: limitSigning(created.id, "opens the limit order"),
+          ...(tx.sandbox ? { warning: "TEST MODE: placeholder transaction that can never land. Never broadcast it." } : {}),
+        };
+      }),
+  );
+
+  server.registerTool(
+    "submit_limit_order",
+    {
+      title: "Submit a signed limit-order transaction",
+      description: `Send a Solana limit order's create or cancel transaction AFTER the maker's own wallet signed it (from create_limit_order or cancel_limit_order). This only relays the already-signed transaction; ${NO_KEYS}`,
+      inputSchema: {
+        id: limitIdSchema,
+        signedTransaction: z.string().min(1).describe("The wallet-signed transaction, base64."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    (a) =>
+      run(async () => {
+        const r = await client.submitLimitOrder(a.id, a.signedTransaction.trim());
+        const lookup = await limitLookup([r.limitOrder.chainId]);
+        return { txHash: r.txHash, limitOrder: formatLimitOrder(r.limitOrder, lookup), next: `Check it with get_limit_order { id: "${a.id}" }.` };
+      }),
+  );
+
+  server.registerTool(
+    "cancel_limit_order",
+    {
+      title: "Cancel a Solana limit order (unsigned)",
+      description: `Cancel an open Solana limit order: returns the UNSIGNED cancel transaction for the maker's wallet to sign, then submit_limit_order. An order that was never submitted is cancelled at once (no transaction). Confirm with the user first. ${NO_KEYS}`,
+      inputSchema: { id: limitIdSchema },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    },
+    ({ id }) =>
+      run(async () => {
+        const r = await client.cancelLimitOrder(id);
+        const lookup = await limitLookup([r.limitOrder.chainId]);
+        if (!r.tx) return { limitOrder: formatLimitOrder(r.limitOrder, lookup), summary: "The order was never submitted, so it is cancelled now. Nothing to sign." };
+        return {
+          limitOrder: formatLimitOrder(r.limitOrder, lookup),
+          unsignedTransaction: { vm: "svm", serializedTx: r.tx.serializedTx, encoding: "base64", submitViaApi: true },
+          signing: limitSigning(id, "cancels the limit order and returns the unfilled tokens"),
         };
       }),
   );

@@ -1,6 +1,6 @@
 {
   "name": "@layerhop/goat",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "LayerHop plugin for the GOAT SDK: best-price cross-chain and same-chain swap quotes, unsigned transactions, deposit addresses and checkout for on-chain agents. LayerHop never sees keys.",
   "license": "MIT",
   "author": "LayerHop (https://layerhop.com)",

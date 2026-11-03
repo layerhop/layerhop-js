@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addressVm, applyBps, CHAINS, DEFAULT_RPC_URLS, getChain, minAfterSlippage, POPULAR_CHAIN_IDS, rankQuotes, rpcUrl, SOLANA_CHAIN_ID, findToken, LayerHopError, paidWithLabel, gasOnArrivalApplies, requestedGasOnArrivalUsd, HYPERLIQUID_CHAIN_ID, isDestinationOnly } from "./index.js";
+import { addressVm, applyBps, CHAINS, DEFAULT_RPC_URLS, getAnyChain, minAfterSlippage, POPULAR_CHAIN_IDS, rankQuotes, rpcUrl, SOLANA_CHAIN_ID, findToken, LayerHopError, paidWithLabel, gasOnArrivalApplies, requestedGasOnArrivalUsd, HYPERLIQUID_CHAIN_ID, isDestinationOnly } from "./index.js";
 import { CANONICAL_TOKENS, TOKENS, canonicalTokenAddress } from "./index.js";
 import type { ProviderQuote } from "./index.js";
 
@@ -22,9 +22,9 @@ const q = (provider: ProviderQuote["provider"], dstAmount: string, estimatedSeco
 
 describe("shared", () => {
   it("resolves chains by id and slug", () => {
-    expect(getChain(8453)?.slug).toBe("base");
-    expect(getChain("solana")?.id).toBe(SOLANA_CHAIN_ID);
-    expect(getChain(999999)).toBeUndefined();
+    expect(getAnyChain(8453)?.slug).toBe("base");
+    expect(getAnyChain("solana")?.id).toBe(SOLANA_CHAIN_ID);
+    expect(getAnyChain(999999)).toBeUndefined();
   });
   it("finds tokens by symbol or address, case-insensitive", () => {
     expect(findToken(8453, "usdc")?.decimals).toBe(6);
@@ -53,7 +53,7 @@ describe("shared", () => {
     expect(requestedGasOnArrivalUsd({ srcChainId: 8453, dstChainId: 42161, dstToken: usdcArb })).toBeUndefined();
   });
   it("lists Hyperliquid as a destination-only EVM-style chain", () => {
-    const hl = getChain("hyperliquid");
+    const hl = getAnyChain("hyperliquid");
     expect(hl?.id).toBe(HYPERLIQUID_CHAIN_ID);
     expect(hl?.vm).toBe("evm");
     expect(hl?.nativeDecimals).toBe(8);
@@ -85,7 +85,7 @@ describe("shared", () => {
       if (!c.destinationOnly) expect(DEFAULT_RPC_URLS[c.id], c.slug).toMatch(/^https:\/\//);
       expect(c.popular).toBe(POPULAR_CHAIN_IDS.includes(c.id));
     }
-    expect(getChain("berachain")).toMatchObject({ id: 80094, nativeSymbol: "BERA" });
+    expect(getAnyChain("berachain")).toMatchObject({ id: 80094, nativeSymbol: "BERA" });
     expect(rpcUrl(80094, { RPC_URL_80094: "https://x" })).toBe("https://x");
   });
   it("detects address families", () => {

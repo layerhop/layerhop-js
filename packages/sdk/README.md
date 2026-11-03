@@ -61,13 +61,20 @@ try {
 | Method | Endpoint | What |
 |---|---|---|
 | `quote(params)` | `GET /v1/quote` | Every successful quote, best for the user first. |
-| `buildTx(quoteId)` | `POST /v1/orders` | The unsigned transaction for a quote (`EvmTx` or `SvmTx`). |
+| `buildTx(quoteId)` | `POST /v1/orders` | The unsigned transaction for a quote (`EvmTx`, `SvmTx` or Tron `TronTx`). |
+| `buildGasless` / `submitGasless` / `gaslessStatus` | `/v1/orders`, `/v1/orders/gasless` | Gasless quotes: EIP-712 typed data to sign, the signatures, the order state. |
+| `lookupToken(address)` / `lookupToken(chain, address)` | `GET /v1/tokens/lookup` | One token; without a chain the API finds it. |
+| `getTokenRisk(chain, address)` | `GET /v1/tokens/{chain}/{address}/risk` | Honeypots, taxes, owner powers, fake majors (`ok` / `caution` / `danger` / `unknown`). |
+| `createSplit` / `getSplit` / `updateSplit` | `/v1/splits` | Split a bill into shares; who has paid. |
+| `getTipJar(address)` | `GET /v1/tip-jars/{address}` | Tip counters and messages. |
+| `planPayouts` / `buildPayoutTransfers` | `/v1/payouts/plan`, `/v1/payouts/transfers` | Check and group payout rows; build a transfer batch to sign. |
+| `limitOrders.*` / `recurringOrders.*` | `/v1/limit-orders`, `/v1/recurring-orders` | Solana limit orders and recurring buys (sign the returned tx, then `submit`). |
 | `submit(quoteId, signedTx)` | `POST /v1/orders/submit` | Solana txs with `submitViaApi`: send the signed tx through LayerHop. |
 | `reportSubmitted(quoteId, txHash)` | `POST /v1/orders/{quoteId}/submitted` | Tell LayerHop the tx was broadcast. |
 | `simulate(quoteId)` | `POST /v1/simulate` | Dry-run the tx (EVM `eth_call` + gas, Solana `simulateTransaction`). |
 | `listOrders(params)` | `GET /v1/orders` | Orders from or to an address, newest first. |
 | `status(provider, id)` | `GET /v1/orders/{provider}/{id}` | Order status. |
-| `watch(provider, id, opts?)` | polls `status` | Async generator yielding each state change until final. |
+| `watch(provider, id, opts?)` | polls `status` | Async generator yielding each state change until final (`filled`, `refunded`, `failed` or `dropped`). |
 | `serviceStatus()` | `GET /v1/status` | Platform status (status.layerhop.com): components, 90-day uptime, incidents. |
 | `checkout.create / get / list / expire / quote / stream` | `/v1/checkout/sessions` | Checkout sessions ("pay with any token"). |
 | `checkout.products.*` | `/v1/checkout/products` | Fixed-price products for payment buttons and `/buy/{id}` links. |

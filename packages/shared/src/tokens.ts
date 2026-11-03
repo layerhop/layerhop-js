@@ -1,9 +1,13 @@
-import { SOLANA_CHAIN_ID } from "./chains.js";
+import { SOLANA_CHAIN_ID, TRON_CHAIN_ID } from "./chains.js";
 import type { ChainId } from "./types.js";
 
 /** Canonical address for a chain's native coin inside LayerHop. Providers map it to their own sentinel. */
 export const EVM_NATIVE = "0x0000000000000000000000000000000000000000";
 export const SOL_NATIVE = "So11111111111111111111111111111111111111112"; // wrapped SOL mint; providers treat it as SOL
+/** Native TRX: the T-address of the zero account (0x41 + 20 zero bytes), as Relay spells it too. */
+export const TRX_NATIVE = "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb";
+/** Tether USDT (TRC-20) on Tron. */
+export const TRON_USDT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
 export interface Token {
   chainId: ChainId;
@@ -25,9 +29,23 @@ export const TOKENS: readonly Token[] = [
   { chainId: 56, address: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", symbol: "USDC", decimals: 18 },
   { chainId: 56, address: "0x55d398326f99059fF775485246999027B3197955", symbol: "USDT", decimals: 18 },
   { chainId: 137, address: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", symbol: "USDC", decimals: 6 },
+  // Kaia: Stargate's USDC.e, the only Kaia stablecoin with a route (LI.FI via Stargate, both ways; checked
+  // 2026-10-26). LI.FI's token list flags it, so it is listed here. Tether's own USDT on Kaia
+  // (0xd077…4fDb) has no route yet and is left out.
+  { chainId: 8217, address: "0xE2053BCf56D2030d2470Fb454574237cF9ee3D4B", symbol: "USDC.e", decimals: 6 },
   { chainId: SOLANA_CHAIN_ID, address: SOL_NATIVE, symbol: "SOL", decimals: 9 },
   { chainId: SOLANA_CHAIN_ID, address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", symbol: "USDC", decimals: 6 },
   { chainId: SOLANA_CHAIN_ID, address: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", symbol: "USDT", decimals: 6 },
+];
+
+/**
+ * Curated tokens of chains behind a flag (FLAGGED_CHAINS: Tron, D-048). Kept out of TOKENS, which
+ * settlement options, deposit-address pickers and public counts are built from; `findToken` and
+ * `tokensForChain` still resolve them.
+ */
+export const FLAGGED_TOKENS: readonly Token[] = [
+  { chainId: TRON_CHAIN_ID, address: TRX_NATIVE, symbol: "TRX", decimals: 6 },
+  { chainId: TRON_CHAIN_ID, address: TRON_USDT, symbol: "USDT", decimals: 6 },
 ];
 
 /**
@@ -68,15 +86,23 @@ export function canonicalTokenAddress(chainId: ChainId, symbol: string): string 
 }
 
 export function tokensForChain(chainId: ChainId): Token[] {
-  return TOKENS.filter((t) => t.chainId === chainId);
+  return [...TOKENS, ...FLAGGED_TOKENS].filter((t) => t.chainId === chainId);
 }
 
 /** Resolve a symbol ("USDC") or address to a known token on a chain. Unknown addresses pass through as undefined. */
 export function findToken(chainId: ChainId, symbolOrAddress: string): Token | undefined {
   const q = symbolOrAddress.toLowerCase();
-  return TOKENS.find((t) => t.chainId === chainId && (t.symbol.toLowerCase() === q || t.address.toLowerCase() === q));
+  const match = (t: Token) => t.chainId === chainId && (t.symbol.toLowerCase() === q || t.address.toLowerCase() === q);
+  return TOKENS.find(match) ?? FLAGGED_TOKENS.find(match);
+}
+
+/** Address of the chain's native coin inside LayerHop (EVM_NATIVE, SOL_NATIVE or TRX_NATIVE). */
+export function nativeAddress(chainId: ChainId): string {
+  return chainId === SOLANA_CHAIN_ID ? SOL_NATIVE : chainId === TRON_CHAIN_ID ? TRX_NATIVE : EVM_NATIVE;
 }
 
 export function isNative(chainId: ChainId, address: string): boolean {
-  return chainId === SOLANA_CHAIN_ID ? address === SOL_NATIVE : address.toLowerCase() === EVM_NATIVE;
+  if (chainId === SOLANA_CHAIN_ID) return address === SOL_NATIVE;
+  if (chainId === TRON_CHAIN_ID) return address === TRX_NATIVE;
+  return address.toLowerCase() === EVM_NATIVE;
 }

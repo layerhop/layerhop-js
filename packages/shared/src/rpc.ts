@@ -1,4 +1,5 @@
-import { SOLANA_CHAIN_ID } from "./chains.js";
+import { SOLANA_CHAIN_ID, TRON_CHAIN_ID } from "./chains.js";
+import type { TronApiConfig } from "./types.js";
 import { RPC_DATA } from "./chains.data.js";
 import type { ChainId } from "./types.js";
 
@@ -18,6 +19,9 @@ export const DEFAULT_RPC_URLS: Readonly<Record<ChainId, string>> = {
   56: "https://bsc-dataseed.binance.org",
   137: "https://polygon.drpc.org",
   [SOLANA_CHAIN_ID]: "https://api.mainnet-beta.solana.com",
+  // Tron (D-048): TronGrid's Ethereum-compatible JSON-RPC (eth_getTransactionByHash / eth_getTransactionReceipt
+  // / eth_call with 0x-hex accounts and 0x-prefixed tx hashes; eth_chainId 0x2b6653dc, checked 2026-10-27).
+  [TRON_CHAIN_ID]: "https://api.trongrid.io/jsonrpc",
 };
 
 export function rpcUrl(chainId: ChainId, env: Record<string, string | undefined> = {}): string | undefined {
@@ -41,4 +45,16 @@ export const FALLBACK_RPC_URLS: Readonly<Record<ChainId, string>> = {
 /** The primary endpoint (env override or default), then the fallback, without duplicates. */
 export function rpcUrls(chainId: ChainId, env: Record<string, string | undefined> = {}): string[] {
   return [...new Set([rpcUrl(chainId, env), FALLBACK_RPC_URLS[chainId]].filter((u): u is string => !!u))];
+}
+
+/**
+ * Tron full-node HTTP API (D-048: building and simulating txs, `wallet/*`): TronGrid by default,
+ * override with TRON_API_URL. Receipts and tx lookups use the JSON-RPC endpoint in DEFAULT_RPC_URLS.
+ * TRONGRID_API_KEY, when set, is sent as `TRON-PRO-API-KEY` (higher rate limits; public works keyless).
+ */
+export const DEFAULT_TRON_API_URL = "https://api.trongrid.io";
+
+export function tronApiConfig(env: Record<string, string | undefined> = {}): TronApiConfig {
+  const url = (env.TRON_API_URL || DEFAULT_TRON_API_URL).replace(/\/+$/, "");
+  return env.TRONGRID_API_KEY ? { url, apiKey: env.TRONGRID_API_KEY } : { url };
 }

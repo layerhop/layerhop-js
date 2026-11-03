@@ -1,12 +1,13 @@
 import { verifyWebhookSignature } from "@layerhop/shared";
 import type {
-  BalancesResponse, BuiltTx, ChainInfo, FeeBreakdown, FeeChannel, GasOnArrival, OrderStatus, PricesResponse, ProviderId, SvmTx, TokenInfo, TokensResponse,
+  BalancesResponse, BuiltTx, ChainInfo, FeeBreakdown, FeeChannel, GasOnArrival, GaslessSignatures, GaslessSignRequest, OrderState, OrderStatus, PricesResponse, ProviderId, RouteSuggestion, SvmTx, TokenInfo, TokenRisk, TokensResponse,
 } from "@layerhop/shared";
 
 export type {
-  BuiltTx, EvmTx, EvmCall, SvmTx, OrderStatus, ProviderId, FeeChannel, FeeBreakdown, GasOnArrival,
+  BuiltTx, EvmTx, EvmCall, SvmTx, TronTx, TronCall, TronApproval, TronUnsignedTx, Vm, WalletVm, OrderStatus, ProviderId, FeeChannel, FeeBreakdown, GasOnArrival,
+  Eip712TypedData, GaslessSignable, GaslessSignRequest, GaslessSignatures,
   ChainInfo, OnlyRoute, TokenInfo, Balance, TokensResponse, PricesResponse, BalancesResponse,
-  ChainRouteHealth, RouteHealthState, RouteHealthStatus,
+  ChainRouteHealth, RouteHealthState, RouteHealthStatus, GaslessExpectation,
 } from "@layerhop/shared";
 
 /**
@@ -20,9 +21,20 @@ export interface AmountTooSmallDetails {
   minAmountUsd?: number;
   minAmountApprox?: boolean;
 }
+/**
+ * `error.details` of `NO_ROUTE` from a live quote (D-053): alternatives that quoted. Read them with
+ * `parseRouteSuggestions(err.details)`.
+ */
+export interface NoRouteDetails {
+  errors?: { provider: string; code: string; message: string }[];
+  suggestions?: RouteSuggestion[];
+}
+export type { RouteLeg, RouteSuggestion, RouteSuggestionKind } from "@layerhop/shared";
+export type { TokenRisk, TokenRiskCode, TokenRiskLevel, TokenRiskReason } from "@layerhop/shared";
+export { parseRouteSuggestions } from "@layerhop/shared";
 export {
   CHAINS, TOKENS, getChain, findToken, SOLANA_CHAIN_ID, EVM_NATIVE, SOL_NATIVE, HYPERLIQUID_CHAIN_ID,
-  gasOnArrivalApplies, DEFAULT_GAS_ON_ARRIVAL_USD,
+  gasOnArrivalApplies, DEFAULT_GAS_ON_ARRIVAL_USD, gaslessApplies, GASLESS_CHAIN_IDS, gaslessProblems, PERMIT2_ADDRESS, GASLESS_MAX_DEADLINE_S,
   SETTLEMENT_TOKENS, findSettlementToken, SANDBOX_MAGIC_AMOUNTS,
   verifyWebhookSignature, WEBHOOK_SIGNATURE_HEADER, WEBHOOK_EVENT_HEADER, WEBHOOK_DELIVERY_HEADER,
 } from "@layerhop/shared";
@@ -70,6 +82,32 @@ export interface QuoteParams {
    * it ignore it (check `quote.gasOnArrival`).
    */
   gasOnArrival?: boolean | number;
+  /**
+   * Gasless swap (when the deployment enables it): the wallet signs EIP-712 typed data instead of
+   * sending a transaction, and the provider's relayer takes the network fee out of `srcToken`. ERC-20
+   * input, same EVM chain only. Then `buildGasless` → sign → `submitGasless` → `gaslessStatus`.
+   */
+  gasless?: boolean;
+  /**
+   * Wallet that referred this user (EVM or Solana address), recorded on the order for referral
+   * attribution. Never changes the fee or the price; invalid values and self-referral are ignored.
+   */
+  referrer?: string;
+  /**
+   * Copy this trade: the trade card's quote id (`q_…`) or the wallet whose trade the user copies. Its
+   * owner gets the referral attribution for this quote (ahead of `referrer`); attribution only.
+   */
+  copyOf?: string;
+  /**
+   * What the payment is for: `tip`, `split` (with `splitId` + `splitShare`), `payout` or `gather`.
+   * Recorded on the order for tip jar counters and split status; never changes the fee or the route.
+   */
+  purpose?: "tip" | "split" | "payout" | "gather" | "rebalance" | "fund";
+  /** Pay one share of a split (`POST /v1/splits`): the quote must deliver the split's token to its recipient. */
+  splitId?: string;
+  splitShare?: number;
+  /** A message to the recipient on a tip or split payment (plain text, at most 140 characters). */
+  note?: string;
 }
 
 /**
@@ -77,7 +115,7 @@ export interface QuoteParams {
  * chain, run by the provider's executor (msg.sender is the executor, not the user). Send `calls` or
  * `action`. See the destination-calls guide for the trust model.
  */
-export interface CallsQuoteParams extends Omit<QuoteParams, "amount" | "gasOnArrival"> {
+export interface CallsQuoteParams extends Omit<QuoteParams, "amount" | "gasOnArrival" | "gasless"> {
   /** The exact amount of `dstToken` the calls receive (base units). The quote reports `srcAmount`. */
   dstAmount: string;
   calls?: DestinationCall[];
@@ -120,6 +158,18 @@ export interface Quote {
   srcAmount?: string;
   /** Destination calls the provider will run (when the request had `calls` / `action`). */
   calls?: DestinationCallsPlan;
+  /** Gasless quotes: the gas fee taken from the input token, and whether an approval signature comes first. */
+  gasless?: { gasFee?: { amount: string; token: string }; approval: boolean };
+}
+
+/** State of a submitted gasless order (`srcTxHash` once the relayer's tx is mined). */
+export interface GaslessOrderStatus {
+  quoteId: string;
+  provider: ProviderId;
+  orderId: string;
+  state: OrderState;
+  srcTxHash?: string;
+  reason?: string;
 }
 
 export interface QuoteResponse {
@@ -133,7 +183,8 @@ export interface QuoteResponse {
 }
 
 /** Lifecycle of an order recorded by the API (docs/PLATFORM_SPEC.md "Orders"). */
-export type OrderLifecycleStatus = "built" | "submitted" | "pending" | "filled" | "refunded" | "failed" | "expired";
+/** `dropped`: the source transaction never reached the network (no funds moved); reporting a new hash revives the order. */
+export type OrderLifecycleStatus = "built" | "submitted" | "pending" | "filled" | "refunded" | "failed" | "expired" | "dropped";
 
 /** An order as returned by `GET /v1/orders` (public fields only). */
 export interface OrderSummary {
@@ -195,7 +246,9 @@ export interface SimulationResponse {
   quoteId: string;
   provider: ProviderId;
   ok: boolean;
-  vm: "evm" | "svm";
+  vm: "evm" | "svm" | "tvm";
+  /** Tron: energy the simulated call used. */
+  energyUsed?: number;
   /** EVM gas units (decimal string) for what was simulated. */
   gasEstimate?: string;
   /** Solana compute units consumed. */
@@ -347,7 +400,7 @@ export interface CheckoutQuoteResponse {
 }
 
 export type WebhookEventType =
-  | "order.submitted" | "order.filled" | "order.refunded" | "order.failed"
+  | "order.submitted" | "order.filled" | "order.refunded" | "order.failed" | "order.dropped"
   | "checkout.session.processing" | "checkout.session.completed" | "checkout.session.payment_failed" | "checkout.session.expired"
   | "checkout.session.refunded" | "invoice.sent" | "invoice.paid"
   | "subscription.created" | "subscription.renewed" | "subscription.past_due" | "subscription.canceled"
@@ -672,6 +725,82 @@ export interface LimitOrderList {
   nextCursor: string | null;
 }
 
+export interface CreateRecurringOrderParams {
+  /** The Solana wallet (base58) that funds, signs and owns the order. */
+  wallet: string;
+  /** Token bought on each order: mint or symbol. */
+  dstToken: string;
+  /** Token spent: mint or symbol. Default `USDC`. */
+  srcToken?: string;
+  /** The whole budget in base units of `srcToken`, deposited when the order opens. */
+  amount: string;
+  /** Number of buys (at least 2; each worth at least $50). */
+  orders: number;
+  /** Seconds between buys (86400 = daily, 604800 = weekly). */
+  intervalSeconds: number;
+  /** Only `solana` (the default). */
+  chain?: string | number;
+}
+
+/** `create` response: the unsigned tx for `wallet` to sign, and the `requestId` to submit it with. No LayerHop fee. */
+export interface RecurringOrderBuild {
+  object: "recurring_order_build";
+  livemode: boolean;
+  /** `jupiter` (live) or `sandbox` (test mode). */
+  provider: string;
+  chainId: number;
+  wallet: string;
+  srcToken: string;
+  dstToken: string;
+  amount: string;
+  amountPerOrder: string;
+  orders: number;
+  intervalSeconds: number;
+  fees: { ourFeeBps: 0; integratorFeeBps: 0 };
+  requestId: string;
+  tx: SvmTx;
+}
+
+export interface RecurringOrderFill {
+  txHash: string;
+  amount: string;
+  dstAmount: string;
+  feeAmount: string;
+  feeToken: string | null;
+  filledAt: string | null;
+}
+
+/** A Solana recurring order (Jupiter Recurring, time-based), read live from Jupiter. Base units throughout. */
+export interface RecurringOrder {
+  /** The order account. */
+  id: string;
+  object: "recurring_order";
+  provider: "jupiter";
+  chainId: number;
+  status: "active" | "completed" | "cancelled";
+  wallet: string;
+  srcToken: string;
+  dstToken: string;
+  amount: string;
+  amountPerOrder: string;
+  orders: number;
+  ordersFilled: number;
+  intervalSeconds: number;
+  spentAmount: string;
+  withdrawnAmount: string;
+  receivedAmount: string;
+  openTxHash: string | null;
+  closeTxHash: string | null;
+  createdAt: string | null;
+  fills: RecurringOrderFill[];
+}
+
+export interface RecurringOrderList {
+  recurringOrders: RecurringOrder[];
+  page: number;
+  totalPages: number;
+}
+
 export type RefundStatus = "pending" | "submitted" | "completed" | "failed";
 
 export interface CreateRefundParams {
@@ -766,6 +895,174 @@ export interface WebhookEventPayload {
 /** A token for `prices()`: `"chainId:address"` or `{ chainId, address }`. */
 export type PriceId = string | { chainId: string | number; address: string };
 
+/** Options for `balances()`. */
+export interface BalancesOptions {
+  /** Tokens always returned, even at zero (at most 20): `"chainId:address"` or `{ chainId, address }`. */
+  tokens?: PriceId[];
+  /** Skip the server's 20 s balance cache for this request. */
+  fresh?: boolean;
+}
+
+/** A token as splits and payouts describe it. */
+export interface PayoutToken {
+  chainId: number;
+  address: string;
+  symbol: string;
+  decimals: number;
+  /** USD price when known. */
+  usd?: number;
+}
+
+export interface CreateSplitParams {
+  /** Address, ENS name or `.sol` name of whoever is owed. */
+  recipient: string;
+  /** Chain slug or id they receive on. */
+  chain: string | number;
+  /** Listed token symbol or address on that chain. */
+  token: string;
+  /** Base units of `token`. */
+  total: string;
+  /** Equal shares for this many people (2–50), or send `shares`. */
+  participants?: number;
+  /** One entry per person: a label (≤ 40 chars) and, for custom shares, an amount in base units (all or none; they add up to `total`). */
+  shares?: { label?: string; amount?: string }[];
+  /** Plain text, kept to 140 characters. */
+  note?: string;
+}
+
+export interface SplitShare {
+  /** The share's number from 0 (`splitShare` on quotes). */
+  index: number;
+  label: string;
+  /** Base units of the split's token. */
+  amount: string;
+  /** Base units delivered by filled orders for this share. */
+  received: string;
+  /** `paid` within 0.5% of `amount`. */
+  status: "unpaid" | "partial" | "paid";
+  payments: number;
+  pending: number;
+}
+
+/** A split bill (`POST /v1/splits`): each participant pays a share with `quote({ purpose: "split", splitId, splitShare })`. */
+export interface Split {
+  id: string;
+  /** The split's page. */
+  url: string;
+  status: "open" | "closed";
+  note: string | null;
+  recipient: string;
+  /** The ENS / .sol name given at creation. */
+  recipientName: string | null;
+  chainId: number;
+  chain: string;
+  token: { address: string; symbol: string; decimals: number };
+  total: string;
+  collected: string;
+  paidCount: number;
+  shares: SplitShare[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `createSplit` response: the split plus its edit secret, shown only once. */
+export interface SplitCreated extends Split {
+  editToken: string;
+  /** The split's page with the secret in the URL fragment (`#k=`). */
+  editUrl: string;
+}
+
+export interface UpdateSplitParams {
+  /** `null` clears the note. */
+  note?: string | null;
+  /** One label per share. */
+  labels?: string[];
+  /** `closed` stops payments (quotes for it answer `CONFLICT`). */
+  status?: "open" | "closed";
+}
+
+/** `GET /v1/tip-jars/{address}`: tip counters and the latest 10 messages. */
+export interface TipJar {
+  address: string;
+  tippers: number;
+  tips: number;
+  messages: { text: string; at: string }[];
+}
+
+/** One payout row: `amount` in HUMAN units of `token` ("25", "0.5"). */
+export interface PayoutRowInput {
+  /** Address, ENS name or .sol name. */
+  recipient: string;
+  amount: string | number;
+  token: string;
+  chain: string | number;
+  label?: string;
+}
+
+export interface PlanPayoutsParams {
+  /** The chain the payer pays from. */
+  srcChain: string | number;
+  /** The token the payer pays with (listed). */
+  srcToken: string;
+  /** The payer's address on `srcChain`. */
+  sender: string;
+  /** Up to 100 rows; or send `csv`. */
+  rows?: PayoutRowInput[];
+  /** `recipient,amount,token,chain[,label]` lines, header optional. */
+  csv?: string;
+}
+
+export interface PayoutPlanRow {
+  /** Row number from 0 (header excluded). */
+  index: number;
+  /** 1-based CSV line (0 for JSON rows). */
+  line: number;
+  input: PayoutRowInput;
+  ok: boolean;
+  error?: { code: string; message: string };
+  recipient?: { address: string; name: string | null };
+  chainId?: number;
+  chain?: string;
+  token?: PayoutToken;
+  /** Base units of `token`. */
+  amount?: string;
+  kind?: "transfer" | "route";
+}
+
+/** `POST /v1/payouts/plan`: every row checked, valid rows grouped into transfer batches and routes. */
+export interface PayoutPlan {
+  source: { chainId: number; chain: string; sender: string; token: PayoutToken };
+  rows: PayoutPlanRow[];
+  /** Build each batch with `buildPayoutTransfers` (no LayerHop fee). */
+  transfers: { chainId: number; token: string; rows: number[]; total: string }[];
+  /** Quote each row with `quote({ ..., purpose: "payout" })` (normal swap fee). */
+  routes: { chainId: number; rows: number[] }[];
+  transferTotal: string;
+  totals: { chainId: number; token: string; symbol: string; decimals: number; amount: string; formatted: string; rows: number }[];
+  valid: number;
+  invalid: number;
+  warnings: string[];
+}
+
+export interface BuildPayoutTransfersParams {
+  chain: string | number;
+  token: string;
+  sender: string;
+  /** At most 20 on EVM chains and 8 on Solana; addresses only (resolve names with `planPayouts`). */
+  transfers: { recipient: string; amount: string }[];
+}
+
+/** One transfer batch for the payer's wallet to sign: EVM `calls` or a Solana `serializedTx`. Nothing is signed. */
+export interface PayoutTransfers {
+  vm: "evm" | "svm";
+  chainId: number;
+  token: PayoutToken;
+  /** EVM: one call per transfer, in order (send as one EIP-5792 `wallet_sendCalls`, or one tx each). */
+  calls?: { to: string; data: string; value: string }[];
+  /** Solana: base64 unsigned legacy transaction (one signature slot, the sender's). */
+  serializedTx?: string;
+}
+
 export class LayerHopApiError extends Error {
   constructor(
     public readonly code: string, message: string, public readonly status: number, public readonly requestId?: string,
@@ -836,10 +1133,61 @@ export class LayerHop {
     return this.call(`/tokens?${q}`);
   }
 
-  /** One token by address / mint. Tokens on no list are read on-chain and have `verified: false`. */
-  async lookupToken(chain: string | number, address: string): Promise<TokenInfo> {
-    const q = new URLSearchParams({ chain: String(chain), address });
+  /**
+   * One token by address / mint. Tokens on no list are read on-chain and have `verified: false`.
+   * `lookupToken(address)` (or a `null` / `undefined` chain) lets the API find the chain: Solana for a
+   * mint, else the supported chain with the most pool liquidity for the address.
+   */
+  async lookupToken(address: string): Promise<TokenInfo>;
+  async lookupToken(chain: string | number | null | undefined, address: string): Promise<TokenInfo>;
+  async lookupToken(chainOrAddress: string | number | null | undefined, maybeAddress?: string): Promise<TokenInfo> {
+    const [chain, address] = maybeAddress === undefined ? [undefined, String(chainOrAddress ?? "")] : [chainOrAddress, maybeAddress];
+    const q = new URLSearchParams(chain === undefined || chain === null || chain === "" ? { address } : { chain: String(chain), address });
     return (await this.call<{ token: TokenInfo }>(`/tokens/lookup?${q}`)).token;
+  }
+
+  /**
+   * A token's safety report (honeypots, taxes, owner powers, fake majors). `level: "unknown"` means
+   * no source answered: never block a swap on it; ask for an explicit confirmation on `danger`.
+   */
+  async getTokenRisk(chain: string | number, address: string): Promise<TokenRisk> {
+    return (await this.call<{ risk: TokenRisk }>(`/tokens/${encodeURIComponent(String(chain))}/${encodeURIComponent(address)}/risk`)).risk;
+  }
+
+  /**
+   * Split a bill: `recipient` is owed `total` of `token`, in equal or custom shares. Public, no key.
+   * Keep `editToken` (shown only here) to rename shares or close the split with `updateSplit`.
+   */
+  createSplit(p: CreateSplitParams): Promise<SplitCreated> {
+    return this.call("/splits", { method: "POST", body: JSON.stringify(p) });
+  }
+
+  /** A split and who has paid. Public. */
+  getSplit(id: string): Promise<Split> {
+    return this.call(`/splits/${encodeURIComponent(id)}`);
+  }
+
+  /** Rename shares, change the note (`null` clears it) or close / reopen a split, with its edit secret. */
+  updateSplit(id: string, editToken: string, p: UpdateSplitParams): Promise<Split> {
+    return this.call(`/splits/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(p), headers: { "x-edit-token": editToken } });
+  }
+
+  /** Tip jar counters for an address (resolve names first). Public. */
+  getTipJar(address: string): Promise<TipJar> {
+    return this.call(`/tip-jars/${encodeURIComponent(address)}`);
+  }
+
+  /**
+   * Check up to 100 payout rows (JSON `rows` or `csv`) and group them against the payer's token:
+   * transfer batches (`buildPayoutTransfers`, no fee) and routes (quote each with `purpose: "payout"`).
+   */
+  planPayouts(p: PlanPayoutsParams): Promise<PayoutPlan> {
+    return this.call("/payouts/plan", { method: "POST", body: JSON.stringify(p) });
+  }
+
+  /** Build one batch of plain transfers for the payer's wallet to sign. Check each call against its row first. */
+  buildPayoutTransfers(p: BuildPayoutTransfersParams): Promise<PayoutTransfers> {
+    return this.call("/payouts/transfers", { method: "POST", body: JSON.stringify(p) });
   }
 
   /** USD prices for up to 100 tokens, keyed by the ids as given (`"chainId:address"`). Unknown ids are omitted. */
@@ -852,10 +1200,14 @@ export class LayerHop {
   /**
    * Non-zero balances of a wallet, highest USD value first. Without `chains`: popular EVM chains for an
    * EVM address, Solana for a Solana address. Chains that fail are listed in `errors`.
+   * `tokens` (at most 20) are always returned, even at zero and even when not on any token list;
+   * `fresh` skips the server's 20 s cache (use it right after a swap).
    */
-  balances(address: string, chains?: (string | number)[]): Promise<BalancesResponse> {
+  balances(address: string, chains?: (string | number)[], opts: BalancesOptions = {}): Promise<BalancesResponse> {
     const q = new URLSearchParams({ address });
     if (chains?.length) q.set("chains", chains.join(","));
+    if (opts.tokens?.length) q.set("tokens", opts.tokens.map((i) => (typeof i === "string" ? i : `${i.chainId}:${i.address}`)).join(","));
+    if (opts.fresh) q.set("fresh", "1");
     return this.call(`/balances?${q}`);
   }
 
@@ -874,6 +1226,8 @@ export class LayerHop {
       if (p.action) body.action = p.action;
       if (this.opts.integrator) body.integrator = this.opts.integrator;
       if (this.opts.integratorFeeBps !== undefined) body.integratorFeeBps = this.opts.integratorFeeBps;
+      if (p.referrer) body.referrer = p.referrer;
+      if (p.copyOf) body.copyOf = p.copyOf;
       return this.call("/quote", { method: "POST", body: JSON.stringify(body) });
     }
     const q = new URLSearchParams({
@@ -883,14 +1237,43 @@ export class LayerHop {
     });
     if (this.opts.integrator) q.set("integrator", this.opts.integrator);
     if (this.opts.integratorFeeBps !== undefined) q.set("integratorFeeBps", String(this.opts.integratorFeeBps));
+    if (p.referrer) q.set("referrer", p.referrer);
+    if (p.copyOf) q.set("copyOf", p.copyOf);
     if (typeof p.gasOnArrival === "number") q.set("gasOnArrivalUsd", String(p.gasOnArrival));
     else if (p.gasOnArrival) q.set("gasOnArrival", "true");
+    if (p.gasless) q.set("gasless", "true");
+    if (p.purpose) q.set("purpose", p.purpose);
+    if (p.splitId !== undefined) q.set("splitId", p.splitId);
+    if (p.splitShare !== undefined) q.set("splitShare", String(p.splitShare));
+    if (p.note) q.set("note", p.note);
     return this.call(`/quote?${q}`);
   }
 
-  /** Get the transaction to sign for a quote. EVM txs may include an `approval` to send first. */
+  /** Gasless quotes: the EIP-712 typed data to sign (an optional `approval`, then `trade`). Records the order. */
+  async buildGasless(quoteId: string): Promise<GaslessSignRequest> {
+    const r = await this.call<{ gasless?: GaslessSignRequest }>("/orders", { method: "POST", body: JSON.stringify({ quoteId }) });
+    if (!r.gasless) throw new Error("This quote is not gasless; use buildTx");
+    return r.gasless;
+  }
+
+  /** Gasless: send the wallet's `signTypedData` signatures; the provider's relayer sends the tx. */
+  submitGasless(quoteId: string, signatures: GaslessSignatures): Promise<GaslessOrderStatus> {
+    return this.call("/orders/gasless", { method: "POST", body: JSON.stringify({ quoteId, signatures }) });
+  }
+
+  /** Gasless: the order's state; poll until `filled` or `failed`. */
+  gaslessStatus(quoteId: string): Promise<GaslessOrderStatus> {
+    return this.call(`/orders/gasless/${encodeURIComponent(quoteId)}`);
+  }
+
+  /**
+   * Get the transaction to sign for a quote. EVM txs may include an `approval` to send first; Tron
+   * txs (`vm: "tvm"`) an `approval` transaction. Gasless quotes have no tx: use `buildGasless`.
+   */
   async buildTx(quoteId: string): Promise<BuiltTx> {
-    return (await this.call<{ tx: BuiltTx }>("/orders", { method: "POST", body: JSON.stringify({ quoteId }) })).tx;
+    const r = await this.call<{ tx?: BuiltTx; gasless?: GaslessSignRequest }>("/orders", { method: "POST", body: JSON.stringify({ quoteId }) });
+    if (!r.tx) throw new Error(r.gasless ? "This quote is gasless; use buildGasless" : "The API returned no transaction for this quote");
+    return r.tx;
   }
 
   /** For SvmTx with `submitViaApi`: send the wallet-signed tx (base64) through LayerHop. Returns the tx signature. */
@@ -1074,6 +1457,27 @@ export class LayerHop {
   };
 
   /**
+   * Solana recurring buys (beta, Jupiter Recurring, no LayerHop fee). `create` returns an unsigned tx
+   * and a `requestId`: have `wallet` sign the tx (sign only), then `submit(requestId, signed)`.
+   * `cancel` returns the cancel tx + `requestId`, submitted the same way. Nothing is stored by LayerHop.
+   */
+  readonly recurringOrders = {
+    create: (p: CreateRecurringOrderParams): Promise<RecurringOrderBuild> =>
+      this.call("/recurring-orders", { method: "POST", body: JSON.stringify({ ...p, ...(p.chain !== undefined ? { chain: String(p.chain) } : {}) }) }),
+    /** Send the wallet-signed create or cancel tx (base64) with its `requestId`. */
+    submit: (requestId: string, signedTransaction: string): Promise<{ txHash: string; order: string | null }> =>
+      this.call("/recurring-orders/submit", { method: "POST", body: JSON.stringify({ requestId, signedTransaction }) }),
+    list: (p: { wallet: string; status?: "active" | "history"; page?: number }): Promise<RecurringOrderList> => {
+      const q = new URLSearchParams({ wallet: p.wallet });
+      if (p.status) q.set("status", p.status);
+      if (p.page !== undefined) q.set("page", String(p.page));
+      return this.call(`/recurring-orders?${q}`);
+    },
+    cancel: (id: string, wallet: string): Promise<{ requestId: string; tx: SvmTx }> =>
+      this.call(`/recurring-orders/${encodeURIComponent(id)}/cancel`, { method: "POST", body: JSON.stringify({ wallet }) }),
+  };
+
+  /**
    * Solana limit orders (beta, Jupiter Trigger). `create` returns an unsigned tx: have `wallet` sign it
    * (sign only, `tx.submitViaApi`), then `submit` it. `cancel` returns the cancel tx to sign and
    * `submit` the same way. An API key is optional; `simulate` works with test keys only.
@@ -1112,7 +1516,7 @@ export class LayerHop {
 
   /**
    * Live order status (Server-Sent Events): yields the order now and on every change, and ends when
-   * it is final (filled, refunded, failed or expired). Pass an AbortSignal to stop early.
+   * it is final (filled, refunded, failed, expired or dropped). Pass an AbortSignal to stop early.
    */
   streamOrder(quoteId: string, opts: { signal?: AbortSignal } = {}): AsyncGenerator<OrderSummary> {
     return this.stream<OrderSummary>(`/orders/${encodeURIComponent(quoteId)}/events`, "order", opts.signal);
@@ -1183,7 +1587,7 @@ export class LayerHop {
     return this.call("/status");
   }
 
-  /** Poll until the order is final (filled/refunded/failed), yielding each change. */
+  /** Poll until the order is final (filled/refunded/failed/dropped), yielding each change. */
   async *watch(provider: ProviderId, id: string, { intervalMs = 3000, timeoutMs = 30 * 60_000 } = {}): AsyncGenerator<OrderStatus> {
     const end = Date.now() + timeoutMs;
     let last = "";
@@ -1193,7 +1597,7 @@ export class LayerHop {
         last = s.state;
         yield s;
       }
-      if (s.state === "filled" || s.state === "refunded" || s.state === "failed") return;
+      if (s.state === "filled" || s.state === "refunded" || s.state === "failed" || s.state === "dropped") return;
       await new Promise((r) => setTimeout(r, intervalMs));
     }
   }

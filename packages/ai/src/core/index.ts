@@ -36,4 +36,5 @@ export {
   type EvmTxRequest,
   type SvmTxRequest,
 } from "./txs.js";
-export { NO_KEYS, DEPOSIT_WARNING, API_KEY_MISSING, AGENT_INSTRUCTIONS, agentInstructions } from "./safety.js";
+export { apiErrorText, explainQuoteError, QuoteHelpError, formatGaslessBuild, formatTokenRisk, formatLimitOrder } from "./extras.js";
+export { NO_KEYS,DEPOSIT_WARNING, API_KEY_MISSING, AGENT_INSTRUCTIONS, agentInstructions } from "./safety.js";

@@ -13,8 +13,8 @@ export async function swapSolToBase(wallet: WalletAdapterLike & { publicKey: { t
     dstChain: "base", dstToken: "USDC",
     sender: wallet.publicKey.toBase58(), recipient: evmRecipient,
   });
-  // Builds the tx, signs it in the wallet (sign-only + POST /v1/orders/submit when the route needs
-  // it, sign-only + our RPC for co-signed txs), then reports the signature to LayerHop.
+  // Builds the tx, has the wallet sign it (then POST /v1/orders/submit when the route needs it,
+  // otherwise our RPC broadcasts it and re-sends it until it lands), then reports the signature.
   const sent = await executeSolanaQuote(fromWalletAdapter(wallet), { quote: best, client: lh, connection });
   const confirmed = await sent.wait();
   return { signature: sent.signature, confirmed, provider: best.provider };

@@ -96,6 +96,7 @@ export function toTransactionRequests(tx: BuiltTx): TxRequest[] {
       },
     ];
   }
+  if (tx.vm === "tvm") throw new Error("Tron transactions aren't supported by the LayerHop agent tools yet. Use the LayerHop app, or the API's TronTx (vm \"tvm\") with a Tron wallet.");
   const out: TxRequest[] = [];
   if (tx.approval) {
     out.push({

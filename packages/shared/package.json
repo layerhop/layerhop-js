@@ -11,6 +11,8 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
+    "@noble/hashes": "1.8.0",
+    "@scure/base": "1.2.6",
     "zod": "^3.24.1"
   },
   "description": "Internal: chain registry, tokens, error codes and types shared by the LayerHop JS packages. Not published; inlined into each package at build time.",

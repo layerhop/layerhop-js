@@ -20,6 +20,8 @@ Amounts in tool inputs are HUMAN decimal strings in the token's own units ("100"
 
 Safe workflow: ${t("list_chains")} / ${t("list_tokens")} if unsure -> ${t("get_quote")} -> show the user output, minimum received, every fee and the ETA -> get explicit confirmation -> prefer giving the user the swapLink (or ${t("get_swap_link")}) so they review and sign in their own wallet on layerhop.com. Only use ${t("build_transaction")} when the user (or the app hosting you) has its own signer; hand the unsigned transaction to that signer, never ask for or accept private keys or seed phrases.
 
+Before a user buys or receives a token that is unverified or unfamiliar, call ${t("get_token_risk")} and show any caution or danger reasons. When ${t("get_quote")} fails with NO_ROUTE, the error may list alternatives that do quote (another destination or source token, or two steps through a hub): offer them, never switch silently. Gasless quotes and Tron transactions can't be completed by these tools: give the user the swap link.
+
 Deposit addresses (${t("create_deposit_address")}, API key required) let a user swap or bridge by just sending a token to an address. When you show one, always tell the user: send ONLY that token on that chain (anything else may be lost), at least $1 worth, and refunds go to refundTo, which must be their own address, never an exchange deposit address. Test-key addresses are fake: never send real funds.`;
 }
 

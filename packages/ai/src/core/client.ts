@@ -10,10 +10,19 @@ import {
   type DepositAddressStatus,
   type DepositAddressWithDeposits,
   type DepositOrder,
+  type CreateLimitOrderParams,
+  type LimitOrder,
+  type LimitOrderCreated,
+  type LimitOrderList,
+  type LimitOrderStatus,
+  type LimitOrderWithFills,
   type PriceId,
   type QuoteResponse,
+  type TokenRisk,
 } from "@layerhop/sdk";
-import { CHAINS, TOKENS, type BuiltTx, type Chain, type OrderStatus, type PricesResponse, type ProviderId, type Token, type TokensResponse } from "@layerhop/shared";
+import {
+  CHAINS, TOKENS, type BuiltTx, type Chain, type GaslessSignRequest, type OrderStatus, type PricesResponse, type ProviderId, type SvmTx, type Token, type TokenInfo, type TokensResponse,
+} from "@layerhop/shared";
 
 export interface ClientOptions {
   apiUrl: string;
@@ -36,9 +45,11 @@ export class EndpointUnavailableError extends Error {
 
 export interface SimulateResult {
   ok: boolean;
-  vm: "evm" | "svm";
+  vm: "evm" | "svm" | "tvm";
   gasEstimate?: string | number;
   computeUnits?: number;
+  /** Tron: energy the simulated call used. */
+  energyUsed?: number;
   needsApproval?: boolean;
   error?: { code: string; message: string; logs?: string[] };
   tx?: BuiltTx;
@@ -108,9 +119,9 @@ export class LayerHopClient {
       body = {};
     }
     if (!res.ok) {
-      const e = (body as { error?: { code: string; message: string; requestId?: string } }).error;
+      const e = (body as { error?: { code: string; message: string; requestId?: string; details?: Record<string, unknown> } }).error;
       if (res.status === 404 && !e) throw new EndpointUnavailableError(`${init?.method ?? "GET"} /v1${path.split("?")[0]}`);
-      throw new LayerHopApiError(e?.code ?? "INTERNAL", e?.message ?? res.statusText, res.status, e?.requestId);
+      throw new LayerHopApiError(e?.code ?? "INTERNAL", e?.message ?? res.statusText, res.status, e?.requestId, e?.details);
     }
     return body as T;
   }
@@ -160,8 +171,11 @@ export class LayerHopClient {
     return this.sdk.quote(p);
   }
 
-  /** POST /v1/orders: turns a quote into an unsigned transaction. Does not sign or send anything. */
-  buildOrder(quoteId: string): Promise<{ quoteId: string; provider: ProviderId; tx: BuiltTx }> {
+  /**
+   * POST /v1/orders: turns a quote into an unsigned transaction (`tx`), or for a gasless quote the
+   * EIP-712 typed data to sign (`gasless`). Does not sign or send anything.
+   */
+  buildOrder(quoteId: string): Promise<{ quoteId: string; provider: ProviderId; tx?: BuiltTx; gasless?: GaslessSignRequest }> {
     return this.raw("/orders", { method: "POST", body: JSON.stringify({ quoteId }) });
   }
 
@@ -223,6 +237,16 @@ export class LayerHopClient {
     return this.sdk.tokens({ chain: chainId, ...(q ? { q } : {}), ...(limit !== undefined ? { limit } : {}) });
   }
 
+  /** One token by address; without `chain` the API finds the chain (Solana for a mint, else the EVM chain with the most liquidity). */
+  lookupToken(address: string, chain?: string | number): Promise<TokenInfo> {
+    return this.viaSdk(() => (chain === undefined ? this.sdk.lookupToken(address) : this.sdk.lookupToken(chain, address)), "GET /v1/tokens/lookup");
+  }
+
+  /** A token's safety report (GET /v1/tokens/{chain}/{address}/risk). */
+  tokenRisk(chain: string | number, address: string): Promise<TokenRisk> {
+    return this.viaSdk(() => this.sdk.getTokenRisk(chain, address), "GET /v1/tokens/{chain}/{address}/risk");
+  }
+
   /** USD prices keyed by "chainId:address". */
   prices(ids: PriceId[]): Promise<PricesResponse["prices"]> {
     return this.sdk.prices(ids);
@@ -258,6 +282,31 @@ export class LayerHopClient {
 
   simulateDeposit(id: string, amount: string): Promise<DepositOrder> {
     return this.viaSdk(() => this.sdk.depositAddresses.simulate(id, { amount }), "POST /v1/deposit-addresses/{id}/simulate");
+  }
+
+  // ---------- Solana limit orders (an API key is optional) ----------
+
+  listLimitOrders(p: { wallet?: string; status?: LimitOrderStatus; cursor?: string; limit?: number }): Promise<LimitOrderList> {
+    return this.viaSdk(() => this.sdk.limitOrders.list(p), "GET /v1/limit-orders");
+  }
+
+  getLimitOrder(id: string): Promise<LimitOrderWithFills> {
+    return this.viaSdk(() => this.sdk.limitOrders.get(id), "GET /v1/limit-orders/{id}");
+  }
+
+  /** Builds the order and its UNSIGNED Solana transaction; nothing is signed or sent. */
+  createLimitOrder(p: CreateLimitOrderParams): Promise<LimitOrderCreated> {
+    return this.viaSdk(() => this.sdk.limitOrders.create(p), "POST /v1/limit-orders");
+  }
+
+  /** Relays a transaction the maker's own wallet already signed. */
+  submitLimitOrder(id: string, signedTransaction: string): Promise<{ limitOrder: LimitOrder; txHash: string }> {
+    return this.viaSdk(() => this.sdk.limitOrders.submit(id, signedTransaction), "POST /v1/limit-orders/{id}/submit");
+  }
+
+  /** The UNSIGNED cancel transaction (`tx: null` when the order was never submitted and is cancelled at once). */
+  cancelLimitOrder(id: string): Promise<{ limitOrder: LimitOrder; tx: SvmTx | null }> {
+    return this.viaSdk(() => this.sdk.limitOrders.cancel(id), "POST /v1/limit-orders/{id}/cancel");
   }
 
   /** Fetch a text document (e.g. docs llms.txt). */

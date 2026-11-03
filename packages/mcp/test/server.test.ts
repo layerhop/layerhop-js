@@ -10,7 +10,14 @@ describe("tool listing", () => {
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
         "build_transaction",
+        "cancel_limit_order",
         "create_deposit_address",
+        "create_limit_order",
+        "get_limit_order",
+        "get_token_risk",
+        "list_limit_orders",
+        "lookup_token",
+        "submit_limit_order",
         "disable_deposit_address",
         "get_deposit_address",
         "get_order_status",

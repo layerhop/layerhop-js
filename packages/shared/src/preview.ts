@@ -8,4 +8,5 @@ import type { Vm } from "./types.js";
 export const PREVIEW_ADDRESS: Readonly<Record<Vm, string>> = {
   evm: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
   svm: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+  tvm: "TQrY8tryqsYVCYS3MFbtffiPp2ccyn4STm",
 };

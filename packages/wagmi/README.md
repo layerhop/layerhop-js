@@ -74,6 +74,10 @@ Options: `batch` (`"auto"` default, `"never"`, `"require"`), `tx` (an already bu
 4. Otherwise, or when the wallet rejects the batch as unsupported (4200, 5700, 5710, 5740, 5750, 5760, -32601), the calls
    go sequentially: approve (and wait), main call, then each extra call. A failed extra call never fails the send.
    A user rejection (4001) is never retried.
+5. If the wallet can't send the batch (funds, gas or simulation, e.g. a smart wallet paying gas in the token at a
+   full-balance swap) or the batch fails with nothing in it landed, the send falls back once to sequential (the
+   allowance is read again first). A batch that partly landed, a pending request (-32002), a timeout and
+   `batch: "require"` never fall back. `onBatchFallback` is called in each case.
 
 Lower-level building blocks: `sendEvmTx(driver, tx)`, `wagmiDriver(config)`, `walletClientDriver(walletClient)`,
 `evmCalls`, `supportsAtomicBatch`, `getAtomicBatchSupport(config, chainId)`.

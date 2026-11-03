@@ -16,7 +16,7 @@ export const CHECKOUT_MESSAGE_VERSION = 1;
 export const CHECKOUT_DEFAULT_HEIGHT = 600;
 export const CHECKOUT_DEFAULT_MAX_WIDTH = 480;
 /** color-scheme for the iframe element; equals the checkout document's root (no opaque canvas). */
-const FRAME_COLOR_SCHEME = "normal";
+const FRAME_COLOR_SCHEME = "light";
 
 // ---------------------------------------------------------------------------------------------
 // Types

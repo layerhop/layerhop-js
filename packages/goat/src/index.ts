@@ -12,7 +12,7 @@ import {
 } from "@layerhop/ai";
 import { z } from "zod/v3";
 
-export const VERSION = "0.7.0";
+export const VERSION = "0.8.0";
 
 export interface LayerHopGoatOptions extends Omit<LayerHopToolsOptions, "toolName" | "client"> {
   /**

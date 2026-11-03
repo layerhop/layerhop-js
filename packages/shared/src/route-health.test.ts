@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyProbeResult, chainStatus, deriveRouteHealth, directionState, routeHealthLabel, routeHealthWarning, runIsUsable,
+  applyProbeResult, chainStatus, deriveRouteHealth, directionState, routeHealthLabel, routeHealthTransitions, routeHealthWarning, runIsUsable,
   type RouteHealthProbeResult, type RouteHealthProbeRow,
 } from "./route-health.js";
 import { minUsdBucket, sanitizeFunnelProps } from "./funnel.js";
@@ -87,5 +87,24 @@ describe("route health derivation", () => {
     expect(minUsdBucket(80)).toBe("50+");
     expect(sanitizeFunnelProps({ min_usd_bucket: "10-25", error_code: "AMOUNT_TOO_SMALL" })).toEqual({ min_usd_bucket: "10-25", error_code: "AMOUNT_TOO_SMALL" });
     expect(sanitizeFunnelProps({ min_usd_bucket: "12.5" })).toEqual({});
+  });
+
+  it("transitions between two snapshots: new chains start unknown, unprobed chains are left alone", () => {
+    const before = new Map([
+      [1, { in: "ok", out: "ok", status: "ok" } as const],
+      [2, { in: "ok", out: "failing", status: "deposit_only" } as const],
+      [3, { in: "ok", out: "ok", status: "ok" } as const],
+    ]);
+    const after = new Map([
+      [1, { in: "ok", out: "failing", status: "deposit_only" } as const],
+      [2, { in: "ok", out: "ok", status: "ok" } as const],
+      [9, { in: "ok", out: "unknown", status: "ok" } as const],
+    ]);
+    expect(routeHealthTransitions(before, after, (id, d) => (id === 1 && d === "out" ? "NO_ROUTE" : undefined))).toEqual([
+      { chainId: 1, direction: "out", from: "ok", to: "failing", errorCode: "NO_ROUTE" },
+      { chainId: 2, direction: "out", from: "failing", to: "ok" },
+      { chainId: 9, direction: "in", from: "unknown", to: "ok" },
+    ]);
+    expect(routeHealthTransitions(after, after)).toEqual([]);
   });
 });

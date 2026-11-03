@@ -1,4 +1,5 @@
 import type { ChainId, ProviderId, Vm } from "./types.js";
+import { isTronAddress } from "./tron.js";
 import type { ChainRouteHealth } from "./route-health.js";
 
 /**
@@ -8,7 +9,7 @@ import type { ChainRouteHealth } from "./route-health.js";
 
 /** A chain as served by `GET /v1/chains`. */
 export interface ChainInfo {
-  /** EVM chain id; Solana = 7565164 (LayerHop internal id). */
+  /** EVM chain id; Solana = 7565164 (LayerHop internal id); Tron = 728126428. */
   id: ChainId;
   /** Unique lowercase short name ("base", "berachain", "solana"). */
   slug: string;
@@ -70,9 +71,9 @@ export interface TokenInfo {
   popular?: boolean;
 }
 
-/** A non-zero wallet balance (`GET /v1/balances`). */
+/** A wallet balance (`GET /v1/balances`): non-zero, or a token the caller asked for with `tokens`. */
 export interface Balance extends TokenInfo {
-  /** Base units, integer string, > 0. */
+  /** Base units, integer string; > 0 unless the token was explicitly requested. */
   amount: string;
   valueUsd?: number;
 }
@@ -95,9 +96,13 @@ export interface BalancesResponse {
   errors: { chainId: ChainId; message: string }[];
 }
 
-/** Address family of a wallet / token address, or undefined if it is neither. */
+/**
+ * Address family of a wallet / token address, or undefined if it is none. A checksummed Tron
+ * T-address is `tvm` (a 34-character `T…` string can't be a 32-byte Solana key).
+ */
 export function addressVm(address: string): Vm | undefined {
   if (/^0x[0-9a-fA-F]{40}$/.test(address)) return "evm";
+  if (isTronAddress(address)) return "tvm";
   if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) return "svm";
   return undefined;
 }

@@ -54,7 +54,7 @@ export interface UseSwapResult extends SwapState {
 
 /** Error raised by the swap state machine itself (API errors keep their `LayerHopApiError` type). */
 export class SwapError extends Error {
-  constructor(public readonly code: "ORDER_FAILED" | "ORDER_REFUNDED" | "TRACKING_TIMEOUT" | "ABORTED", message: string) {
+  constructor(public readonly code: "ORDER_FAILED" | "ORDER_REFUNDED" | "ORDER_DROPPED" | "TRACKING_TIMEOUT" | "ABORTED", message: string) {
     super(message);
     this.name = "SwapError";
   }
@@ -127,6 +127,7 @@ export function useSwap(opts: UseSwapOptions): UseSwapResult {
           if (status.state === "filled") break;
           if (status.state === "unknown" && SAME_CHAIN_PROVIDERS.includes(quote.provider)) break;
           if (isFinalState(status.state)) {
+            if (status.state === "dropped") throw new SwapError("ORDER_DROPPED", "The transaction never reached the network; no funds moved. Get a new quote and try again.");
             const code = status.state === "refunded" ? "ORDER_REFUNDED" : "ORDER_FAILED";
             throw new SwapError(code, `Order ${status.state}`);
           }

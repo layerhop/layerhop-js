@@ -109,7 +109,7 @@ describe("mountCheckout", () => {
     expect(f).toBe(handle.iframe);
     expect(f.src).toBe(`https://layerhop.com/pay/${SID}?embed=1&origin=${encodeURIComponent(location.origin)}`);
     expect(f.style.height).toBe("600px");
-    expect(f.style.colorScheme).toBe("normal");
+    expect(f.style.colorScheme).toBe("light");
     post(f, env("ready"));
     post(f, env("resize", { height: 731.4 }));
     post(f, env("status", { status: "paid" }));

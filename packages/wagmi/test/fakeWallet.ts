@@ -21,6 +21,8 @@ export interface FakeWalletOptions {
   allowance?: bigint;
   chainId?: number;
   receiptStatus?: "0x1" | "0x0";
+  /** `wallet_getCallsStatus` answer: status code (default 200) and the batch receipt's status (default `receiptStatus`). */
+  callsStatus?: { status: number; receiptStatus?: "0x1" | "0x0" };
 }
 
 export interface Req {
@@ -36,9 +38,9 @@ export function fakeWallet(opts: FakeWalletOptions = {}) {
   let sent = 0;
   const batches = new Map<string, Hex>();
 
-  const receipt = (hash: Hex) => ({
+  const receipt = (hash: Hex, status = opts.receiptStatus ?? "0x1") => ({
     blockHash: hashOf(999), blockNumber: "0x10", contractAddress: null, cumulativeGasUsed: "0x1", effectiveGasPrice: "0x1",
-    from: ACCOUNT, gasUsed: "0x1", logs: [], logsBloom: `0x${"0".repeat(512)}`, status: opts.receiptStatus ?? "0x1",
+    from: ACCOUNT, gasUsed: "0x1", logs: [], logsBloom: `0x${"0".repeat(512)}`, status,
     to: ROUTER, transactionHash: hash, transactionIndex: "0x0", type: "0x2",
   });
 
@@ -69,7 +71,7 @@ export function fakeWallet(opts: FakeWalletOptions = {}) {
       case "wallet_getCallsStatus": {
         const id = (params as [string])[0];
         const hash = batches.get(id)!;
-        return { version: "2.0.0", id, chainId: numberToHex(chainId), atomic: true, status: 200, receipts: [receipt(hash)] };
+        return { version: "2.0.0", id, chainId: numberToHex(chainId), atomic: true, status: opts.callsStatus?.status ?? 200, receipts: [receipt(hash, opts.callsStatus?.receiptStatus)] };
       }
       case "eth_sendTransaction": {
         const n = sent++;

@@ -44,6 +44,26 @@ describe("sdk", () => {
     expect(new URL(urls[1]!).searchParams.has("integratorFeeBps")).toBe(false);
   });
 
+  it("sends referrer only when set (GET and POST quotes)", async () => {
+    const seen: { url: string; body?: string }[] = [];
+    const f = fakeFetch((url, init) => {
+      seen.push({ url, body: init?.body as string | undefined });
+      return [200, { best: { quoteId: "q1" }, quotes: [], errors: [] }];
+    });
+    const lh = new LayerHop({ baseUrl: "http://x", fetch: f });
+    const params = { srcChain: "base", srcToken: "USDC", amount: "1", dstChain: "solana", dstToken: "SOL", sender: "a", recipient: "b" };
+    await lh.quote({ ...params, referrer: "0xref" });
+    await lh.quote(params);
+    expect(new URL(seen[0]!.url).searchParams.get("referrer")).toBe("0xref");
+    expect(new URL(seen[1]!.url).searchParams.has("referrer")).toBe(false);
+    const { amount: _a, ...rest } = params;
+    await lh.quote({ ...rest, dstAmount: "5", action: { type: "aave-v3-supply" }, referrer: "So1" });
+    expect(JSON.parse(seen[2]!.body!).referrer).toBe("So1");
+    await lh.quote({ ...params, copyOf: "q_card" });
+    expect(new URL(seen[3]!.url).searchParams.get("copyOf")).toBe("q_card");
+    expect(new URL(seen[1]!.url).searchParams.has("copyOf")).toBe(false);
+  });
+
   it("sends gasOnArrival (true → flag, number → USD) and exposes quote.gasOnArrival", async () => {
     const urls: string[] = [];
     const gas = { amount: "832291636081249", token: "0x0000000000000000000000000000000000000000", symbol: "ETH", decimals: 18, usd: 2 };
@@ -238,6 +258,27 @@ describe("sdk", () => {
     ]);
   });
 
+  it("recurringOrders: create, submit, list and cancel hit the recurring-order routes", async () => {
+    const seen: string[] = [];
+    const lh = new LayerHop({ baseUrl: "http://x", fetch: fakeFetch((url, init) => {
+      seen.push(`${init?.method ?? "GET"} ${url} ${init?.body ?? ""}`);
+      if (url.endsWith("/recurring-orders") && init?.method === "POST") return [201, { object: "recurring_order_build", requestId: "r1", tx: { vm: "svm", serializedTx: "AQ==", submitViaApi: true } }];
+      if (url.endsWith("/submit")) return [200, { txHash: "sig1", order: "O1" }];
+      if (url.endsWith("/cancel")) return [200, { requestId: "r2", tx: { vm: "svm", serializedTx: "Ag==", submitViaApi: true } }];
+      return [200, { recurringOrders: [], page: 1, totalPages: 0 }];
+    }) });
+    expect((await lh.recurringOrders.create({ wallet: "W1", dstToken: "BONK", amount: "350000000", orders: 7, intervalSeconds: 86400 })).requestId).toBe("r1");
+    expect(await lh.recurringOrders.submit("r1", "c2ln")).toEqual({ txHash: "sig1", order: "O1" });
+    await lh.recurringOrders.list({ wallet: "W1", status: "history", page: 2 });
+    expect((await lh.recurringOrders.cancel("O/1", "W1")).requestId).toBe("r2");
+    expect(seen).toEqual([
+      'POST http://x/v1/recurring-orders {"wallet":"W1","dstToken":"BONK","amount":"350000000","orders":7,"intervalSeconds":86400}',
+      'POST http://x/v1/recurring-orders/submit {"requestId":"r1","signedTransaction":"c2ln"}',
+      "GET http://x/v1/recurring-orders?wallet=W1&status=history&page=2 ",
+      'POST http://x/v1/recurring-orders/O%2F1/cancel {"wallet":"W1"}',
+    ]);
+  });
+
   it("limitOrders: create, submit, get, list, cancel and simulate hit the limit-order routes", async () => {
     const seen: string[] = [];
     const lh = new LayerHop({ baseUrl: "http://x", channel: "web", fetch: fakeFetch((url, init) => {
@@ -374,6 +415,91 @@ describe("sdk", () => {
     expect(seen[0]).toEqual({ url: "http://x/v1/orders/q_1/submitted", method: "POST", body: JSON.stringify({ txHash: "0xabc" }) });
   });
 
+  it("gasless: quote param, typed data from /orders, signatures to /orders/gasless, status", async () => {
+    const seen: { url: string; method?: string; body?: string }[] = [];
+    const typed = { types: { Permit: [] }, domain: {}, message: {}, primaryType: "Permit" };
+    const gasless = { chainId: 8453, approval: { type: "permit", eip712: typed }, trade: { type: "settler_metatransaction", eip712: typed }, gasFee: { amount: "42000", token: "0xusdc" } };
+    const lh = new LayerHop({ baseUrl: "http://x", fetch: fakeFetch((url, init) => {
+      seen.push({ url, method: init?.method, body: init?.body ? String(init.body) : undefined });
+      if (url.includes("/v1/quote?")) return [200, { best: { quoteId: "q_1", gasless: { approval: true, gasFee: gasless.gasFee } }, quotes: [], errors: [] }];
+      if (url.endsWith("/v1/orders")) return [200, { quoteId: "q_1", provider: "zerox", gasless }];
+      if (url.endsWith("/v1/orders/gasless")) return [200, { quoteId: "q_1", provider: "zerox", orderId: "0xtrade", state: "pending" }];
+      return [200, { quoteId: "q_1", provider: "zerox", orderId: "0xtrade", state: "filled", srcTxHash: "0xtx" }];
+    }) });
+    const q = await lh.quote({ srcChain: "base", srcToken: "USDC", amount: "1", dstChain: "base", dstToken: "ETH", sender: "a", recipient: "a", gasless: true });
+    expect(new URL(seen[0]!.url).searchParams.get("gasless")).toBe("true");
+    expect(q.best.gasless?.approval).toBe(true);
+    expect(await lh.buildGasless("q_1")).toEqual(gasless);
+    const sub = await lh.submitGasless("q_1", { trade: "0xsig", approval: "0xsig2" });
+    expect(sub.orderId).toBe("0xtrade");
+    expect(seen[2]).toEqual({ url: "http://x/v1/orders/gasless", method: "POST", body: JSON.stringify({ quoteId: "q_1", signatures: { trade: "0xsig", approval: "0xsig2" } }) });
+    expect((await lh.gaslessStatus("q_1")).srcTxHash).toBe("0xtx");
+    expect(seen[3]!.url).toBe("http://x/v1/orders/gasless/q_1");
+  });
+
+  it("buildGasless refuses a quote that is not gasless", async () => {
+    const lh = new LayerHop({ baseUrl: "http://x", fetch: fakeFetch(() => [200, { quoteId: "q_1", provider: "relay", tx: { vm: "evm" } }]) });
+    await expect(lh.buildGasless("q_1")).rejects.toThrow(/not gasless/);
+  });
+
+  it("buildTx refuses a gasless quote and returns Tron txs as built", async () => {
+    const gaslessLh = new LayerHop({ baseUrl: "http://x", fetch: fakeFetch(() => [200, { quoteId: "q_1", provider: "zerox", gasless: { chainId: 8453, trade: {} } }]) });
+    await expect(gaslessLh.buildTx("q_1")).rejects.toThrow(/gasless; use buildGasless/);
+    const call = { to: "TXYZ", data: "0x01", value: "0", feeLimit: "150000000" };
+    const tron = { vm: "tvm", chainId: 728126428, from: "TABC", call, unsigned: { txID: "a".repeat(64), raw_data_hex: "0a", raw_data: { expiration: 1 } }, approval: { token: "TUSDT", spender: "TXYZ", amount: "5", call } };
+    const tronLh = new LayerHop({ baseUrl: "http://x", fetch: fakeFetch(() => [200, { quoteId: "q_2", provider: "relay", tx: tron }]) });
+    const tx = await tronLh.buildTx("q_2");
+    expect(tx.vm).toBe("tvm");
+    if (tx.vm === "tvm") expect(tx.unsigned?.txID).toHaveLength(64);
+  });
+
+  it("getTokenRisk reads the risk report", async () => {
+    const urls: string[] = [];
+    const risk = { chainId: 8453, address: "0x1111111111111111111111111111111111111111", level: "danger", verified: false, symbol: "USDC", reasons: [{ code: "fake_symbol", level: "danger", message: "x" }], source: "goplus", checkedAt: "2026-10-27T09:00:00.000Z" };
+    const lh = new LayerHop({ baseUrl: "http://x", fetch: fakeFetch((url) => {
+      urls.push(url);
+      return [200, { risk }];
+    }) });
+    expect(await lh.getTokenRisk("base", risk.address)).toEqual(risk);
+    expect(urls[0]).toBe(`http://x/v1/tokens/base/${risk.address}/risk`);
+  });
+
+  it("splits, tip jars and payouts hit their routes; updateSplit sends the edit secret", async () => {
+    const seen: { url: string; method?: string; body?: string; edit?: string }[] = [];
+    const split = { id: "spl_1", url: "u", status: "open", note: null, recipient: "0x1", recipientName: null, chainId: 8453, chain: "base", token: { address: "0xusdc", symbol: "USDC", decimals: 6 }, total: "100", collected: "0", paidCount: 0, shares: [], createdAt: "t", updatedAt: "t" };
+    const lh = new LayerHop({ baseUrl: "http://x", fetch: fakeFetch((url, init) => {
+      seen.push({ url, method: init?.method, body: init?.body ? String(init.body) : undefined, edit: (init?.headers as Record<string, string>)["x-edit-token"] });
+      if (url.endsWith("/v1/splits")) return [201, { ...split, editToken: "sec", editUrl: "u#k=sec" }];
+      if (url.includes("/v1/splits/")) return [200, split];
+      if (url.includes("/v1/tip-jars/")) return [200, { address: "0x1", tippers: 2, tips: 3, messages: [] }];
+      if (url.endsWith("/v1/payouts/plan")) return [200, { rows: [], transfers: [], routes: [], valid: 0, invalid: 0 }];
+      return [200, { vm: "evm", chainId: 8453, token: { chainId: 8453, address: "0xusdc", symbol: "USDC", decimals: 6 }, calls: [] }];
+    }) });
+    const created = await lh.createSplit({ recipient: "alice.eth", chain: "base", token: "USDC", total: "100", participants: 2, note: "Dinner" });
+    expect(created.editToken).toBe("sec");
+    expect(seen[0]).toMatchObject({ url: "http://x/v1/splits", method: "POST", body: JSON.stringify({ recipient: "alice.eth", chain: "base", token: "USDC", total: "100", participants: 2, note: "Dinner" }) });
+    expect((await lh.getSplit("spl_1")).id).toBe("spl_1");
+    expect(seen[1]).toMatchObject({ url: "http://x/v1/splits/spl_1", method: undefined });
+    await lh.updateSplit("spl_1", "sec", { note: null, status: "closed" });
+    expect(seen[2]).toMatchObject({ url: "http://x/v1/splits/spl_1", method: "PATCH", body: JSON.stringify({ note: null, status: "closed" }), edit: "sec" });
+    expect((await lh.getTipJar("0x1")).tippers).toBe(2);
+    expect(seen[3]!.url).toBe("http://x/v1/tip-jars/0x1");
+    await lh.planPayouts({ srcChain: "base", srcToken: "USDC", sender: "0xa", csv: "alice.eth,25,USDC,base" });
+    expect(seen[4]).toMatchObject({ url: "http://x/v1/payouts/plan", method: "POST", body: JSON.stringify({ srcChain: "base", srcToken: "USDC", sender: "0xa", csv: "alice.eth,25,USDC,base" }) });
+    const batch = await lh.buildPayoutTransfers({ chain: "base", token: "USDC", sender: "0xa", transfers: [{ recipient: "0xb", amount: "25000000" }] });
+    expect(batch.vm).toBe("evm");
+    expect(seen[5]).toMatchObject({ url: "http://x/v1/payouts/transfers", method: "POST" });
+  });
+
+  it("NO_ROUTE details carry suggestions (parseRouteSuggestions drops malformed ones)", async () => {
+    const good = { kind: "dst_token", message: "Receive USDC instead", srcChain: 8453, srcToken: "0xa", amount: "100", dstChain: 1, dstToken: "0xusdc", dstAmount: "99" };
+    const lh = new LayerHop({ baseUrl: "http://x", fetch: fakeFetch(() => [400, { error: { code: "NO_ROUTE", message: "no route", details: { errors: [], suggestions: [good, { kind: "via_hub", message: "x", srcChain: 1, srcToken: "a", amount: "1", dstChain: 2, dstToken: "b" }] } } }]) });
+    const err = await lh.quote({ srcChain: "base", srcToken: "USDC", amount: "100", dstChain: "ethereum", dstToken: "PEPE", sender: "a", recipient: "a" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LayerHopApiError);
+    const { parseRouteSuggestions } = await import("./index.js");
+    expect(parseRouteSuggestions((err as LayerHopApiError).details)).toEqual([good]);
+  });
+
   it("simulate posts the quoteId and returns the typed result", async () => {
     let body = "";
     const lh = new LayerHop({ baseUrl: "http://x", fetch: fakeFetch((url, init) => {
@@ -430,10 +556,15 @@ describe("sdk assets", () => {
     expect((await lh.lookupToken("base", "0xa")).symbol).toBe("WETH");
     expect(urls[0]!.pathname).toBe("/v1/tokens/lookup");
     expect(urls[0]!.searchParams.get("address")).toBe("0xa");
+    expect(urls[0]!.searchParams.get("chain")).toBe("base");
     expect(await lh.prices(["8453:0xa", { chainId: 7565164, address: "So1" }])).toEqual({ "8453:0xa": 1 });
     expect(urls[1]!.searchParams.get("ids")).toBe("8453:0xa,7565164:So1");
     expect(await lh.prices([])).toEqual({});
     expect(urls).toHaveLength(2);
+    // Chain-less: the API finds the chain.
+    await lh.lookupToken("0xb");
+    await lh.lookupToken(undefined, "0xc");
+    expect(urls.slice(2).map((u) => [u.searchParams.has("chain"), u.searchParams.get("address")])).toEqual([[false, "0xb"], [false, "0xc"]]);
   });
 
   it("balances() sends chains only when given", async () => {
@@ -442,6 +573,16 @@ describe("sdk assets", () => {
     expect(urls[0]!.searchParams.has("chains")).toBe(false);
     await lh.balances("0xabc", ["base", 80094]);
     expect(urls[1]!.searchParams.get("chains")).toBe("base,80094");
+    expect(urls[1]!.searchParams.has("tokens")).toBe(false);
+    expect(urls[1]!.searchParams.has("fresh")).toBe(false);
+  });
+
+  it("balances() sends requested tokens and fresh", async () => {
+    const { lh, urls } = capture({ address: "0xabc", vm: "evm", balances: [], totalUsd: 0, errors: [] });
+    await lh.balances("0xabc", undefined, { tokens: ["80094:0x59a6", { chainId: 8453, address: "0xa" }], fresh: true });
+    expect(urls[0]!.searchParams.has("chains")).toBe(false);
+    expect(urls[0]!.searchParams.get("tokens")).toBe("80094:0x59a6,8453:0xa");
+    expect(urls[0]!.searchParams.get("fresh")).toBe("1");
   });
 });
 

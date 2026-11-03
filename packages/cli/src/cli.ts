@@ -11,7 +11,7 @@ import { buildSwapLink } from "./link.js";
 import { startMockServer, type MockServer } from "./mock-server.js";
 import { TEMPLATE_NAMES, packageNameFrom, renderTemplate, type TemplateName } from "./templates.js";
 
-export const VERSION = "0.7.0";
+export const VERSION = "0.8.0";
 export const DEFAULT_API_URL = "https://api.layerhop.com";
 
 export interface Io {
@@ -267,7 +267,7 @@ async function cmdQuote(p: ParsedArgs, io: Io): Promise<number> {
   return 0;
 }
 
-const FINAL = new Set<OrderStatus["state"]>(["filled", "refunded", "failed"]);
+const FINAL = new Set<OrderStatus["state"]>(["filled", "refunded", "failed", "dropped"]);
 
 function statusLine(s: OrderStatus): string {
   return [s.state.toUpperCase(), s.srcTxHash ? `src ${s.srcTxHash}` : "", s.dstTxHash ? `dst ${s.dstTxHash}` : ""].filter(Boolean).join("  ");
@@ -279,7 +279,7 @@ async function cmdStatus(p: ParsedArgs, io: Io): Promise<number> {
   if (!p.opts.watch) {
     const s = await lh.status(provider, id);
     io.out(p.opts.json ? json(s) : statusLine(s));
-    return s.state === "failed" ? 1 : 0;
+    return s.state === "failed" || s.state === "dropped" ? 1 : 0;
   }
   const intervalMs = (int(p.opts.interval, "interval") ?? 3) * 1000;
   const sleep = io.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
@@ -468,7 +468,7 @@ function defaultSpawn(cmd: string, args: string[], opts: { cwd: string; env: Rec
 }
 
 const EVENT_TYPES: readonly WebhookEventType[] = [
-  "order.submitted", "order.filled", "order.refunded", "order.failed",
+  "order.submitted", "order.filled", "order.refunded", "order.failed", "order.dropped",
   "checkout.session.processing", "checkout.session.completed", "checkout.session.payment_failed", "checkout.session.expired",
   "subscription.created", "subscription.renewed", "subscription.past_due", "subscription.canceled",
 ];

@@ -20,7 +20,7 @@ export type LayerHopClient = Pick<LayerHop, "quote" | "buildTx" | "submit" | "st
   tokens?: (chain: string | number) => Promise<readonly Token[] | { tokens: readonly Token[] }>;
 };
 
-export const FINAL_STATES: readonly OrderStatus["state"][] = ["filled", "refunded", "failed"];
+export const FINAL_STATES: readonly OrderStatus["state"][] = ["filled", "refunded", "failed", "dropped"];
 
 export function isFinalState(state: OrderStatus["state"] | undefined): boolean {
   return state !== undefined && FINAL_STATES.includes(state);

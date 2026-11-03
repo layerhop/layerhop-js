@@ -134,6 +134,7 @@ export function formatBuiltTx(
   const steps: string[] = [];
   const reportStep = `After the transaction is broadcast, call ${t("report_submitted")} with quoteId "${quoteId}" and the tx hash/signature, then track it with ${t("get_order_status")} (provider "${provider}").`;
   let out: Record<string, unknown>;
+  if (tx.vm === "tvm") throw new Error("Tron transactions aren't supported by the LayerHop agent tools yet. Use the LayerHop app, or the API's TronTx (vm \"tvm\") with a Tron wallet.");
   if (tx.vm === "evm") {
     const chain = chainName(tx.chainId);
     const approval = tx.approval

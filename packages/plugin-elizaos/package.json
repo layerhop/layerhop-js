@@ -1,6 +1,6 @@
 {
   "name": "@layerhop/plugin-elizaos",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "LayerHop plugin for ElizaOS: best-price cross-chain and same-chain swap quotes, unsigned transactions with an explicit confirmation step, deposit addresses and checkout. Holds no keys and never auto-signs.",
   "license": "MIT",
   "author": "LayerHop (https://layerhop.com)",

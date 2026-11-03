@@ -100,7 +100,7 @@ export interface UseOrderStatusOptions {
   intervalMs?: number;
 }
 
-/** Polls an order until it is `filled`, `refunded` or `failed`. Idle while `provider` or `id` is empty. */
+/** Polls an order until it is `filled`, `refunded`, `failed` or `dropped`. Idle while `provider` or `id` is empty. */
 export function useOrderStatus(
   provider: ProviderId | null | undefined,
   id: string | null | undefined,
@@ -118,7 +118,7 @@ export function useOrderStatus(
   return Object.assign(q, { isFinal: isFinalState(q.data?.state) });
 }
 
-const ORDER_FINAL = new Set(["filled", "refunded", "failed", "expired"]);
+const ORDER_FINAL = new Set(["filled", "refunded", "failed", "expired", "dropped"]);
 
 export interface OrderStreamState {
   /** The latest order (null until the first event). */

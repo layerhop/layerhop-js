@@ -1,8 +1,8 @@
 /**
  * Route health (D-036). The API probes every listed chain every few hours with small read-only
  * quotes, in both directions:
- * - `in`:  Base USDC → the chain's native coin / canonical stablecoin
- * - `out`: the chain's native coin / canonical stablecoin → Base USDC
+ * - `in`:  Base USDC → the chain's native coin / canonical stablecoin / WETH
+ * - `out`: the chain's native coin / canonical stablecoin / WETH → Base USDC
  * (Arbitrum USDC is the counterpart for Base itself.) A direction works when any of its probes got a
  * quote. GET /v1/chains reports the result per chain as `routeHealth`.
  *
@@ -11,7 +11,7 @@
  */
 
 export type RouteHealthDirection = "in" | "out";
-export type RouteHealthTokenKind = "native" | "stable";
+export type RouteHealthTokenKind = "native" | "stable" | "wrapped";
 /** One direction of one chain. */
 export type RouteHealthState = "ok" | "failing" | "unknown";
 /** The chain as a whole. */
@@ -145,4 +145,36 @@ export function routeHealthLabel(h: ChainRouteHealth | undefined): string | unde
     default:
       return undefined;
   }
+}
+
+/** A direction of a chain that changed state between two runs (public status page incidents). */
+export interface RouteHealthTransition {
+  chainId: number;
+  direction: RouteHealthDirection;
+  from: RouteHealthState;
+  to: RouteHealthState;
+  /** Error code of a failing probe of that direction, when it turned failing. */
+  errorCode?: string | null;
+}
+
+/**
+ * Directions whose state differs between two derived snapshots (before and after a run). A chain
+ * missing from `before` starts as `unknown`; a chain missing from `after` is left alone (it was not
+ * probed, so nothing changed).
+ */
+export function routeHealthTransitions(
+  before: ReadonlyMap<number, ChainRouteHealth>, after: ReadonlyMap<number, ChainRouteHealth>,
+  errorCode?: (chainId: number, direction: RouteHealthDirection) => string | null | undefined,
+): RouteHealthTransition[] {
+  const out: RouteHealthTransition[] = [];
+  for (const [chainId, h] of after) {
+    const prev = before.get(chainId);
+    for (const direction of ["in", "out"] as const) {
+      const from = prev?.[direction] ?? "unknown";
+      const to = h[direction];
+      if (from === to) continue;
+      out.push({ chainId, direction, from, to, ...(to === "failing" ? { errorCode: errorCode?.(chainId, direction) ?? null } : {}) });
+    }
+  }
+  return out.sort((a, b) => a.chainId - b.chainId || a.direction.localeCompare(b.direction));
 }

@@ -7,17 +7,23 @@
  *   (`from` is an owner key or a bundler) is accepted when its input contains the built calldata.
  *   Orders without a stored built transaction are checked by `from` only.
  * - Solana (`getTransaction`, confirmed): the order's sender must be one of the signers.
+ * - Tron (TronGrid JSON-RPC `eth_getTransactionByHash`): as EVM, with T-addresses compared as their
+ *   20-byte 0x form and the bare hex hash sent 0x-prefixed (D-048).
  *
  * `notfound` covers "not visible yet" and "could not ask" (no RPC, RPC error): the hash can be
  * recorded as provisional, never as verified.
  */
-import { getChain } from "./chains.js";
+import { getAnyChain } from "./chains.js";
+import { normalizeTronTxHash, tronToEvmHex } from "./tron.js";
 import type { ChainId } from "./types.js";
 
 export type ReportedTxCheck = { result: "verified" } | { result: "notfound"; reason: string } | { result: "mismatch"; reason: string };
 
 /** Fingerprint of a built tx as stored on the order (`orders.built_txs`, see the API's tx-fingerprint.ts). */
-type Fingerprint = { vm: "evm"; to: string; data: string; value: string } | { vm: "svm"; ixs: unknown[] };
+type Fingerprint =
+  | { vm: "evm"; to: string; data: string; value: string }
+  | { vm: "svm"; ixs: unknown[] }
+  | { vm: "tvm"; to: string; data: string; value: string };
 
 export interface ReportedTxOrder {
   srcChainId: number;
@@ -48,10 +54,11 @@ async function rpc<T>(deps: ReportedTxDeps, url: string, method: string, params:
 }
 
 export async function checkReportedTx(o: ReportedTxOrder, hash: string, deps: ReportedTxDeps): Promise<ReportedTxCheck> {
-  const chain = getChain(String(o.srcChainId));
+  const chain = getAnyChain(String(o.srcChainId));
   const url = deps.rpcUrl(o.srcChainId);
   if (!chain || !url) return { result: "notfound", reason: `no RPC for chain ${o.srcChainId}` };
   try {
+    if (chain.vm === "tvm") return await checkTvm(o, hash, url, deps);
     return chain.vm === "evm" ? await checkEvm(o, hash, url, deps) : await checkSvm(o, hash, url, deps);
   } catch (e) {
     return { result: "notfound", reason: e instanceof Error ? e.message : String(e) };
@@ -72,6 +79,16 @@ async function checkEvm(o: ReportedTxOrder, hash: string, url: string, deps: Rep
   }
   if (fps.length === 0 || wrapped || fps.some((f) => f.to === to)) return { result: "verified" };
   return { result: "mismatch", reason: "the transaction does not call the contract this order was built for" };
+}
+
+/** Tron: the EVM check on TronGrid's JSON-RPC, with the order's T-addresses as 0x accounts. */
+async function checkTvm(o: ReportedTxOrder, hash: string, url: string, deps: ReportedTxDeps): Promise<ReportedTxCheck> {
+  const h = normalizeTronTxHash(hash);
+  if (!h) return { result: "mismatch", reason: "not a Tron transaction hash" };
+  const fps = (Array.isArray(o.builtTxs) ? (o.builtTxs as Fingerprint[]) : [])
+    .filter((f): f is Extract<Fingerprint, { vm: "tvm" }> => f?.vm === "tvm")
+    .map((f) => ({ vm: "evm" as const, to: tronToEvmHex(f.to), data: f.data.toLowerCase(), value: f.value }));
+  return checkEvm({ ...o, sender: tronToEvmHex(o.sender), builtTxs: fps }, `0x${h}`, url, deps);
 }
 
 async function checkSvm(o: ReportedTxOrder, sig: string, url: string, deps: ReportedTxDeps): Promise<ReportedTxCheck> {

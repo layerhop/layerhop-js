@@ -70,6 +70,18 @@ export function createResolvers(client: LayerHopClient) {
     }
   };
 
+  /** Like resolveToken, but an unlisted address gets its decimals from the API's token lookup (read on-chain). */
+  const resolveTokenOnline = async (chain: Chain, input: string, decimals?: number): Promise<TokenInfo & { verified?: boolean }> => {
+    try {
+      return await resolveToken(chain, input, decimals);
+    } catch (e) {
+      const q = input.trim();
+      if (!(e instanceof UserInputError) || !isValidAddress(chain.vm, q)) throw e;
+      const t = await client.lookupToken(q, chain.id);
+      return { symbol: t.symbol, address: t.address, decimals: t.decimals, verified: t.verified };
+    }
+  };
+
   const tokenLookup = async (chainIds: number[]): Promise<TokenLookup> => {
     const ids = [...new Set(chainIds)];
     const lists = new Map(await Promise.all(ids.map(async (id) => [id, await client.tokens(id)] as const)));
@@ -81,7 +93,7 @@ export function createResolvers(client: LayerHopClient) {
 
   const chainNameById = (all: Chain[]) => (id: number) => all.find((c) => c.id === id)?.name ?? `chain ${id}`;
 
-  return { resolveChain, resolveToken, resolveTokenLoose, tokenLookup, chainNameById };
+  return { resolveChain, resolveToken, resolveTokenLoose, resolveTokenOnline, tokenLookup, chainNameById };
 }
 
 export type Resolvers = ReturnType<typeof createResolvers>;

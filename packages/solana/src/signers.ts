@@ -1,14 +1,17 @@
 import { VersionedTransaction, type Connection, type SendOptions } from "@solana/web3.js";
-import { bytesToBase58 } from "./bytes.js";
+import { LayerHopSolanaError, walletSignature } from "./send.js";
 
 /**
  * The two wallet operations a LayerHop Solana send needs. Build one from your wallet stack with
  * `fromWalletAdapter`, `fromWalletStandard` or `fromInjectedProvider`. Nothing here holds keys.
  */
 export interface SolanaSigner {
-  /** Sign only (submit-via-API and co-signed transactions must not be rewritten by the wallet). */
+  /**
+   * Sign only. Every send asks for this first: we broadcast and re-send the signed bytes ourselves.
+   * Throw `LayerHopSolanaError("SIGN_UNSUPPORTED")` when the wallet can't sign without sending.
+   */
   signTransaction(tx: VersionedTransaction): Promise<VersionedTransaction>;
-  /** Sign and broadcast in the wallet; resolves to the signature (base58). Optional. */
+  /** Sign and broadcast in the wallet; resolves to the signature (base58). Only used when sign-only is unsupported. Optional. */
   signAndSendTransaction?(tx: VersionedTransaction, ctx: { connection: Connection; sendOptions: SendOptions }): Promise<string>;
 }
 
@@ -24,10 +27,12 @@ export function fromWalletAdapter(wallet: WalletAdapterLike): SolanaSigner {
   const send = wallet.sendTransaction;
   return {
     signTransaction: async (tx) => {
-      if (!sign) throw new Error("This wallet cannot sign transactions without sending them.");
+      if (!sign) throw new LayerHopSolanaError("SIGN_UNSUPPORTED", "This wallet cannot sign transactions without sending them.");
       return sign(tx);
     },
-    ...(send ? { signAndSendTransaction: (tx: VersionedTransaction, { connection, sendOptions }: { connection: Connection; sendOptions: SendOptions }) => send(tx, connection, sendOptions) } : {}),
+    ...(send
+      ? { signAndSendTransaction: async (tx: VersionedTransaction, { connection, sendOptions }: { connection: Connection; sendOptions: SendOptions }) => walletSignature(await send(tx, connection, sendOptions)) }
+      : {}),
   };
 }
 
@@ -62,20 +67,19 @@ export function fromWalletStandard(wallet: StandardWalletLike, account: Standard
   const sendFeature = wallet.features["solana:signAndSendTransaction"] as StdSignAndSend | undefined;
   return {
     signTransaction: async (tx) => {
-      if (!signFeature) throw new Error("This wallet does not support solana:signTransaction.");
-      const [out] = await signFeature.signTransaction({ account, transaction: tx.serialize(), chain });
-      if (!out) throw new Error("The wallet returned no signed transaction.");
+      if (!signFeature) throw new LayerHopSolanaError("SIGN_UNSUPPORTED", "This wallet does not support solana:signTransaction.");
+      const [out] = (await signFeature.signTransaction({ account, transaction: tx.serialize(), chain })) ?? [];
+      if (!(out?.signedTransaction instanceof Uint8Array)) throw new LayerHopSolanaError("WALLET_NO_SIGNATURE", "The wallet returned no signed transaction, so nothing was sent.");
       return VersionedTransaction.deserialize(out.signedTransaction);
     },
     ...(sendFeature
       ? {
           signAndSendTransaction: async (tx: VersionedTransaction, { sendOptions }: { sendOptions: SendOptions }) => {
-            const [out] = await sendFeature.signAndSendTransaction({
+            const [out] = (await sendFeature.signAndSendTransaction({
               account, transaction: tx.serialize(), chain,
               options: { skipPreflight: sendOptions.skipPreflight, maxRetries: sendOptions.maxRetries, preflightCommitment: sendOptions.preflightCommitment },
-            });
-            if (!out) throw new Error("The wallet returned no signature.");
-            return bytesToBase58(out.signature);
+            })) ?? [];
+            return walletSignature(out?.signature);
           },
         }
       : {}),
@@ -89,21 +93,18 @@ export function fromWalletStandard(wallet: StandardWalletLike, account: Standard
  */
 export interface InjectedProviderLike {
   signTransaction<T extends VersionedTransaction>(tx: T): Promise<T>;
-  signAndSendTransaction?: (tx: VersionedTransaction, options?: SendOptions) => Promise<string | { signature: string }>;
+  signAndSendTransaction?: (tx: VersionedTransaction, options?: SendOptions) => Promise<string | { signature: string | Uint8Array } | undefined>;
 }
 
 /** A `SolanaSigner` from an injected-style provider (see `InjectedProviderLike`). */
 export function fromInjectedProvider(provider: InjectedProviderLike): SolanaSigner {
-  const send = provider.signAndSendTransaction?.bind(provider);
+  const send = typeof provider.signAndSendTransaction === "function" ? provider.signAndSendTransaction.bind(provider) : undefined;
   return {
-    signTransaction: (tx) => provider.signTransaction(tx),
-    ...(send
-      ? {
-          signAndSendTransaction: async (tx: VersionedTransaction, { sendOptions }: { sendOptions: SendOptions }) => {
-            const r = await send(tx, sendOptions);
-            return typeof r === "string" ? r : r.signature;
-          },
-        }
-      : {}),
+    signTransaction: async (tx) => {
+      // Typed as required, but some mobile / WalletConnect providers only sign-and-send.
+      if (typeof provider.signTransaction !== "function") throw new LayerHopSolanaError("SIGN_UNSUPPORTED", "This wallet cannot sign transactions without sending them.");
+      return provider.signTransaction(tx);
+    },
+    ...(send ? { signAndSendTransaction: async (tx: VersionedTransaction, { sendOptions }: { sendOptions: SendOptions }) => walletSignature(await send(tx, sendOptions)) } : {}),
   };
 }

@@ -142,6 +142,50 @@ describe("executeQuote (wagmi)", () => {
     expect(w.of("eth_sendTransaction")).toHaveLength(2);
   });
 
+  it("a batch the wallet can't send near full balance falls back once to approve, then swap", async () => {
+    // e.g. a smart wallet paying gas in the token being swapped: wallet_sendCalls fails, nothing is pending.
+    const { w, config } = await connected({
+      capabilities: { atomic: { status: "supported" } }, allowance: 0n, sendCallsError: { code: -32603, message: "Insufficient balance to cover the batch and gas" },
+    });
+    const fallback = vi.fn();
+    const approval = vi.fn();
+    const steps: string[] = [];
+    const r = await executeQuote(config, { quote: { quoteId: "q_1" }, client: client(), onBatchFallback: fallback, onApproval: approval, onStep: (s) => steps.push(s) });
+    expect(r.mode).toBe("sequential");
+    expect(fallback).toHaveBeenCalledOnce();
+    expect(w.of("wallet_sendCalls")).toHaveLength(1);
+    const sends = w.of("eth_sendTransaction").map((x) => (x.params as [{ to: string; data: Hex }])[0]);
+    expect(sends.map((s) => s.to.toLowerCase())).toEqual([TOKEN, ROUTER, TOKEN]);
+    expect(decodeApprove(sends[0]!.data).functionName).toBe("approve");
+    expect(approval).toHaveBeenLastCalledWith({ batched: false });
+    expect(steps).toEqual(["building", "signing", "approving", "signing", "reporting"]);
+  });
+
+  it("a batch that failed without landing anything falls back once to sequential", async () => {
+    const { w, config } = await connected({ capabilities: { atomic: { status: "supported" } }, allowance: 0n, callsStatus: { status: 500, receiptStatus: "0x0" } });
+    const fallback = vi.fn();
+    const r = await executeQuote(config, { quote: { quoteId: "q_1" }, client: client(), onBatchFallback: fallback });
+    expect(r.mode).toBe("sequential");
+    expect(fallback).toHaveBeenCalledWith(expect.objectContaining({ code: "BATCH_FAILED" }));
+    expect(w.of("wallet_sendCalls")).toHaveLength(1);
+    expect(w.of("eth_sendTransaction")).toHaveLength(3);
+  });
+
+  it("never falls back after a batch that partly landed, or on a pending request or timeout", async () => {
+    const partial = await connected({ capabilities: { atomic: { status: "supported" } }, allowance: 0n, callsStatus: { status: 600, receiptStatus: "0x1" } });
+    await expect(executeQuote(partial.config, { quote: { quoteId: "q" }, client: client() })).rejects.toMatchObject({ code: "BATCH_FAILED" });
+    expect(partial.w.of("eth_sendTransaction")).toHaveLength(0);
+    for (const err of [{ code: -32002, message: "Requested resource not available" }, { code: -32603, message: "The request timed out" }]) {
+      const p = await connected({ capabilities: { atomic: { status: "supported" } }, allowance: 0n, sendCallsError: err });
+      await expect(executeQuote(p.config, { quote: { quoteId: "q" }, client: client() })).rejects.toThrow();
+      expect(p.w.of("eth_sendTransaction")).toHaveLength(0);
+    }
+    // batch: "require" never falls back.
+    const req = await connected({ capabilities: { atomic: { status: "supported" } }, allowance: 0n, callsStatus: { status: 500, receiptStatus: "0x0" } });
+    await expect(executeQuote(req.config, { quote: { quoteId: "q" }, client: client(), batch: "require" })).rejects.toMatchObject({ code: "BATCH_FAILED" });
+    expect(req.w.of("eth_sendTransaction")).toHaveLength(0);
+  });
+
   it("a rejected batch is a rejection: no sequential retry, no report", async () => {
     const { w, config } = await connected({ capabilities: { atomic: { status: "supported" } }, sendCallsError: { code: 4001, message: "User rejected" } });
     const c = client();

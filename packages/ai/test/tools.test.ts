@@ -186,3 +186,89 @@ describe("transaction requests", () => {
     expect(evm.map((x) => x.kind)).toEqual(["swap", "extra"]);
   });
 });
+
+describe("quote help, gasless, token lookup / risk, limit orders", () => {
+  const ETH_USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+  const noRoute = (details: Record<string, unknown>, code = "NO_ROUTE") =>
+    fakeApi([(c) => (c.url.pathname === "/v1/quote" ? { status: 422, body: { error: { code, message: "No route", details } } } : undefined)]);
+
+  it("lists NO_ROUTE suggestions in human units (via_hub as two steps), dropping malformed ones", async () => {
+    const leg = { srcChain: 8453, srcToken: BASE_USDC, amount: "100000000", dstChain: 1, dstToken: ETH_USDC, dstAmount: "99500000" };
+    const api = noRoute({
+      suggestions: [
+        { ...leg, kind: "dst_token", message: "Receive USDC on Ethereum instead", symbol: "USDC" },
+        { ...leg, kind: "via_hub", message: "Go through Base USDC", hub: { chainId: 8453, token: BASE_USDC, symbol: "USDC", decimals: 6 }, steps: [leg, { ...leg, srcChain: 1, srcToken: ETH_USDC }] },
+        { kind: "via_hub", message: "broken", srcChain: 1 },
+      ],
+    });
+    const r = (await make(api).byName.get_quote!.run(quoteArgs)) as { ok: false; error: string };
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/^LayerHop API error NO_ROUTE/);
+    expect(r.error).toContain("1. Receive USDC on Ethereum instead [dst_token]: 100 USDC on Base -> ~99.5 USDC on Ethereum");
+    expect(r.error).toMatch(/2\. Go through Base USDC \[via_hub: TWO separate swaps.*step 1: .*step 2: /);
+    expect(r.error).not.toContain("broken");
+  });
+
+  it("states the route minimum on AMOUNT_TOO_SMALL", async () => {
+    const api = noRoute({ minAmount: "25000000", minAmountUsd: 25, minAmountApprox: true }, "AMOUNT_TOO_SMALL");
+    const r = (await make(api).byName.get_quote!.run(quoteArgs)) as { error: string };
+    expect(r.error).toContain("The smallest amount that quotes on this route is at most 25 USDC (about $25.00)");
+  });
+
+  it("sends gasless and returns the typed data with a clear can't-sign notice instead of a tx", async () => {
+    const typed = { types: {}, domain: {}, message: {}, primaryType: "Trade" };
+    const api = fakeApi([
+      (c) =>
+        c.url.pathname === "/v1/orders"
+          ? { body: { quoteId: "q_best", provider: "zerox", gasless: { chainId: 8453, trade: { type: "settler_metatransaction", eip712: typed }, gasFee: { amount: "42000", token: BASE_USDC } } } }
+          : undefined,
+    ]);
+    const set = make(api);
+    await set.byName.get_quote!.run({ fromChain: "base", fromToken: "USDC", amount: "100", toChain: "base", toToken: "ETH", sender: EVM, gasless: true });
+    expect(api.last("/v1/quote")!.url.searchParams.get("gasless")).toBe("true");
+    const r = (await set.byName.build_transaction!.run({ quoteId: "q_best" })) as { data: any };
+    expect(r.data.gasless).toBe(true);
+    expect(r.data.networkFeeTakenFromInput).toBe("0.042 USDC");
+    expect(r.data.signing.notice).toMatch(/cannot sign typed data for the user/);
+    expect(r.data.unsignedTransaction).toBeUndefined();
+  });
+
+  it("looks up a token without a chain and checks its risk", async () => {
+    const risk = { chainId: 8453, address: BASE_USDC, level: "danger", verified: false, symbol: "USDC", reasons: [{ code: "sell_tax", level: "danger", value: 25, message: "25% is taken on every sell." }], source: "goplus", checkedAt: "2026-10-27T09:00:00.000Z" };
+    const api = fakeApi([
+      (c) => (c.url.pathname === "/v1/tokens/lookup" ? { body: { token: { chainId: 8453, address: BASE_USDC, symbol: "USDC", name: "USD Coin", decimals: 6, verified: false } } } : undefined),
+      (c) => (c.url.pathname.endsWith("/risk") ? { body: { risk } } : undefined),
+    ]);
+    const set = make(api);
+    const l = (await set.byName.lookup_token!.run({ address: BASE_USDC })) as { data: any };
+    expect(api.last("/v1/tokens/lookup")!.url.searchParams.has("chain")).toBe(false);
+    expect(l.data.token).toMatchObject({ symbol: "USDC", chain: "Base" });
+    expect(l.data.note).toMatch(/verified false/);
+    const k = (await set.byName.get_token_risk!.run({ chain: "base", token: "USDC" })) as { data: any };
+    expect(api.last(`/v1/tokens/8453/${BASE_USDC}/risk`)).toBeDefined();
+    expect(k.data).toMatchObject({ level: "danger", chain: "Base" });
+    expect(k.data.tellTheUser).toMatch(/explicit confirmation/);
+  });
+
+  it("lists and gets limit orders with human amounts", async () => {
+    const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    const WSOL = "So11111111111111111111111111111111111111112";
+    const order = {
+      id: "lo_1", object: "limit_order", livemode: true, status: "open", statusDetail: null, provider: "jupiter", chainId: 7565164, wallet: SOL, srcToken: SOL_USDC, dstToken: WSOL,
+      amount: "50000000", dstAmount: "500000000", expiresAt: null, fees: { ourFeeBps: 10, integratorFeeBps: 0, integrator: null }, providerOrderId: "p", filledAmount: "0", filledDstAmount: "0",
+      fillCount: 0, openTxHash: null, cancelTxHash: null, channel: "api", metadata: null, createdAt: "t", updatedAt: "t",
+    };
+    const api = fakeApi([
+      (c) => (c.url.pathname === "/v1/limit-orders" ? { body: { limitOrders: [order], nextCursor: null } } : undefined),
+      (c) => (c.url.pathname === "/v1/limit-orders/lo_1" ? { body: { ...order, fills: [] } } : undefined),
+    ]);
+    const set = make(api);
+    const l = (await set.byName.list_limit_orders!.run({ wallet: SOL })) as { data: any };
+    expect(api.last("/v1/limit-orders")!.url.searchParams.get("wallet")).toBe(SOL);
+    expect(l.data.limitOrders[0]).toMatchObject({ id: "lo_1", sell: "50 USDC", forAtLeast: "0.5 SOL" });
+    const g = (await set.byName.get_limit_order!.run({ id: "lo_1" })) as { data: any };
+    expect(g.data.limitOrder.status).toBe("open");
+    const noKey = await set.byName.list_limit_orders!.run({});
+    expect(noKey.ok).toBe(false);
+  });
+});

@@ -37,7 +37,7 @@ import { createOpenAIAgentsTools } from "@layerhop/ai/openai-agents"; // Functio
 import { createLayerHopTools } from "@layerhop/ai";                   // plain { name, description, schema, execute, run }
 ```
 
-Tools: `list_chains`, `list_tokens`, `get_prices`, `get_quote`, `build_transaction`, `simulate_transaction`, `report_submitted`, `get_order_status`, `get_swap_link`, `create_deposit_address`, `get_deposit_address`, `create_checkout_session`. Amounts in tool inputs are human decimals (`"100"` = 100 USDC). Quotes use the `api` fee channel.
+Tools: `list_chains`, `list_tokens`, `get_prices`, `get_quote`, `build_transaction`, `simulate_transaction`, `report_submitted`, `get_order_status`, `get_swap_link`, `create_deposit_address`, `get_deposit_address`, `create_checkout_session`, `lookup_token`, `get_token_risk`, `list_limit_orders`, `get_limit_order`. Amounts in tool inputs are human decimals (`"100"` = 100 USDC). Quotes use the `api` fee channel.
 
 Tested with `ai` 7.0.127, `@langchain/core` 1.2.12 and `@openai/agents` 0.18.0. ElizaOS, Coinbase AgentKit and GOAT have their own packages: `@layerhop/plugin-elizaos`, `@layerhop/agentkit`, `@layerhop/goat`.
 

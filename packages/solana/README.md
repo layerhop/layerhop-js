@@ -49,11 +49,17 @@ await sent.wait(); // true once confirmed
 - **`api`** (`submitViaApi: true`, e.g. Jupiter): the wallet only signs, then the signed bytes go to `POST /v1/orders/submit`.
 - **`cosigned`** (the provider already signed, e.g. Mayan): the wallet only signs (signing and sending could rewrite the transaction and
   void the provider's signature), then your `connection` broadcasts the exact bytes.
-- **`wallet`**: the wallet signs and sends. Sign-only wallets are broadcast through your `connection`.
+- **`wallet`**: the wallet only signs, then your `connection` broadcasts the signed bytes. Only a wallet that can't sign
+  without sending (some mobile adapters) signs and sends itself.
+
+In `cosigned` and `wallet` mode the same signed bytes are sent again every 2 s (`resendIntervalMs`) until the transaction
+lands or its blockhash expires; `sendSvmTx` resolves after the first broadcast, so report the signature right away.
+`wait()` resolves `true` (confirmed) or `false` (failed) and rejects with `LayerHopSolanaError` `BLOCKHASH_EXPIRED` when it
+can no longer land. A wallet answer without a signature is `WALLET_NO_SIGNATURE`.
 
 Test-mode (`sandbox`) transactions never reach the wallet. `executeSolanaQuote` reports a placeholder signature instead.
 
-Other exports: `decodeSvmTx`, `solanaSendMode`, `confirmSignature`, `base64ToBytes`, `bytesToBase64`, `bytesToBase58`.
+Other exports: `decodeSvmTx`, `solanaSendMode`, `confirmSignature`, `landSignedTx`, `walletSignature`, `isSignUnsupported`, `base64ToBytes`, `bytesToBase64`, `bytesToBase58`.
 
 Guide (Privy, Dynamic, Reown and more): <https://docs.layerhop.com/guides/wallets>. Example: [`example/swap.ts`](example/swap.ts).
 

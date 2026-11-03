@@ -13,7 +13,9 @@ export async function fetchJson<T>(
   try {
     res = await fetchFn(url, { ...rest, signal: combined });
   } catch (e) {
-    if (timeout.aborted) throw new LayerHopError("PROVIDER_TIMEOUT", `Timed out: ${new URL(url).host}`);
+    // Our timeout, or the caller's deadline (an AbortSignal.timeout, e.g. the quote's provider budget).
+    const timedOut = timeout.aborted || (combined.aborted && (combined.reason as { name?: string } | undefined)?.name === "TimeoutError");
+    if (timedOut) throw new LayerHopError("PROVIDER_TIMEOUT", `Timed out: ${new URL(url).host}`);
     throw new LayerHopError("PROVIDER_ERROR", `Network error: ${(e as Error).message}`);
   }
   const text = await res.text();

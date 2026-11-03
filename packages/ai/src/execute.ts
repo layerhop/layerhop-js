@@ -79,8 +79,9 @@ export async function executeEvmSwap(deps: ExecDeps, quoteId: string, signer: Ev
   const ctx = checkQuote(deps, quoteId, signer.address);
   const built = await deps.client.buildOrder(quoteId);
   const tx = built.tx;
+  if (!tx) throw new UserInputError(built.gasless ? `Quote ${quoteId} is gasless: the wallet signs EIP-712 typed data, which the swap executors do not do. Use the swap link, or the SDK (buildGasless, submitGasless).` : `The API returned no transaction for quote ${quoteId}.`);
   if (tx.sandbox) throw new SandboxTxError();
-  if (tx.vm !== "evm") throw new UserInputError(`Quote ${quoteId} is a Solana transaction; this wallet is an EVM wallet.`);
+  if (tx.vm !== "evm") throw new UserInputError(`Quote ${quoteId} is a ${tx.vm === "svm" ? "Solana" : "Tron"} transaction; this wallet is an EVM wallet.`);
   if (signer.chainId !== undefined && signer.chainId !== tx.chainId) {
     throw new UserInputError(`The swap must be sent on chain ${tx.chainId} (${ctx.srcChain.name}) but the wallet is on chain ${signer.chainId}. Switch the wallet's network first.`);
   }
@@ -117,8 +118,9 @@ export async function executeSvmSwap(deps: ExecDeps, quoteId: string, signer: Sv
   const ctx = checkQuote(deps, quoteId, signer.address);
   const built = await deps.client.buildOrder(quoteId);
   const tx = built.tx;
+  if (!tx) throw new UserInputError(built.gasless ? `Quote ${quoteId} is gasless: the wallet signs EIP-712 typed data, which the swap executors do not do. Use the swap link, or the SDK (buildGasless, submitGasless).` : `The API returned no transaction for quote ${quoteId}.`);
   if (tx.sandbox) throw new SandboxTxError();
-  if (tx.vm !== "svm") throw new UserInputError(`Quote ${quoteId} is an EVM transaction; this wallet is a Solana wallet.`);
+  if (tx.vm !== "svm") throw new UserInputError(`Quote ${quoteId} is ${tx.vm === "evm" ? "an EVM" : "a Tron"} transaction; this wallet is a Solana wallet.`);
   let txHash: string;
   if (tx.submitViaApi) {
     if (!signer.signTransaction) throw new UserInputError("This route needs a sign-only Solana wallet (submitViaApi); the wallet cannot sign without sending.");

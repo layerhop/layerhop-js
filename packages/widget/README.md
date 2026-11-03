@@ -82,7 +82,7 @@ buildEmbedUrl({ srcChain: "base", lockSrc: true }); // https://layerhop.com/embe
 ```html
 <div data-layerhop-widget data-src-chain="base" data-dst-chain="solana" data-theme="dark"></div>
 <!-- once @layerhop/widget is published to npm -->
-<script src="https://unpkg.com/@layerhop/widget@0.7.0/dist/embed.js"></script>
+<script src="https://unpkg.com/@layerhop/widget@0.8.0/dist/embed.js"></script>
 <script>
   document.querySelector("[data-layerhop-widget]")
     .addEventListener("layerhop:quote", (e) => console.log(e.detail));
@@ -181,9 +181,9 @@ param with a hex value) and `headerTitle` (the `title` param). See the [widget r
 Invalid values throw a `LayerHopWidgetError` when you call `buildEmbedUrl`, `mount` or `update`.
 This makes integration bugs show up early. The embed page itself silently ignores bad params.
 
-The iframe always gets `color-scheme: normal`, which matches the embed page. A different value
-(for example inherited from a page with `color-scheme: dark`) makes browsers paint an opaque box
-behind the transparent widget.
+The iframe always gets `color-scheme: light`, which matches the embed page's root. With `normal`, a
+host page that declares a dark scheme makes the iframe dark and browsers paint an opaque white box
+behind the transparent widget. The card's own theme (dark, light, auto) is unaffected.
 
 ### Presets
 
@@ -266,7 +266,7 @@ The widget accepts a message only if all of these are true:
 | `onReady` | `ready` | `{ version }` |
 | `onQuote` | `quote` | `{ provider, srcChain, dstChain, amount, dstAmount }` |
 | `onSubmitted` | `submitted` | `{ provider, srcChainId, srcTxHash }` |
-| `onStatus` | `status` | `{ provider, srcTxHash, state }` where state is `pending`, `filled`, `refunded` or `failed` |
+| `onStatus` | `status` | `{ provider, srcTxHash, state }` where state is `pending`, `filled`, `refunded`, `failed` or `dropped` (the transaction never reached the network) |
 | `onError` | `error` | `{ code, message }` |
 | `onResize` | `resize` | `{ height }` in px; the iframe is resized automatically unless `autoResize: false` |
 | `onRoutes` | `routes` | `{ count, provider }`: routes that answered and the best one's provider |

@@ -23,7 +23,7 @@ export interface MoneyLine {
  */
 export const oneLine = (s: string) => s.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").replace(/ {2,}/g, " ").trim();
 
-import { getChain } from "./chains.js";
+import { getAnyChain } from "./chains.js";
 import { findToken, isNative } from "./tokens.js";
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -41,7 +41,7 @@ export function formatTokenAmount(amount: string, decimals: number): string {
 /** "0.0746 ETH on Arbitrum" for what a payer sent; unknown tokens show a shortened address. */
 export function paidWithLabel(p: { srcChainId: number | null; srcToken: string | null; srcAmount: string | null }): string | null {
   if (!p.srcChainId) return null;
-  const chain = getChain(String(p.srcChainId));
+  const chain = getAnyChain(String(p.srcChainId));
   const chainName = chain?.name ?? String(p.srcChainId);
   if (!p.srcToken) return chainName;
   const native = chain && isNative(p.srcChainId, p.srcToken) ? { symbol: chain.nativeSymbol, decimals: chain.nativeDecimals } : undefined;

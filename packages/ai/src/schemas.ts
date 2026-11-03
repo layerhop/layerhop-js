@@ -74,6 +74,12 @@ function build(z: Z, ref: (base: string) => string) {
       slippageBps: slippage,
       fromTokenDecimals: decimals("fromToken"),
       toTokenDecimals: decimals("toToken"),
+      gasless: z
+        .boolean()
+        .optional()
+        .describe(
+          "Optional gasless swap (same EVM chain, ERC-20 input, where the API enables it): the user signs EIP-712 typed data instead of a transaction and the network fee is taken from fromToken. Agent tools cannot sign or submit typed data for the user, so the user finishes it via the swap link or their own app.",
+        ),
     }),
     build_transaction: z.object({ quoteId }),
     simulate_transaction: z.object({ quoteId }),
@@ -112,6 +118,25 @@ function build(z: Z, ref: (base: string) => string) {
       label: z.string().min(1).max(64).optional().describe("Your reference for this address (1-64 chars)."),
     }),
     get_deposit_address: z.object({ id: depositId }),
+    lookup_token: z.object({
+      address: z.string().min(1).describe("Token contract address (EVM 0x...) or SPL mint (Solana)."),
+      chain: chain("Optional: the token's")
+        .optional()
+        .describe("Optional chain slug or id. Without it LayerHop finds the chain: Solana for a mint, else the supported EVM chain with the most liquidity for the address."),
+    }),
+    get_token_risk: z.object({
+      chain: chain("The token's"),
+      token: token("The token to check: symbol or"),
+    }),
+    list_limit_orders: z.object({
+      wallet: z.string().min(1).optional().describe("Solana wallet (base58) whose limit orders to list. Without it: the API key's account."),
+      status: z.enum(["built", "open", "filled", "cancelled", "expired", "failed"]).optional().describe("Only orders with this status."),
+      limit: z.number().int().min(1).max(100).optional().describe("Max orders to return."),
+      cursor: z.string().optional().describe("nextCursor from a previous call, for the next page."),
+    }),
+    get_limit_order: z.object({
+      id: z.string().regex(/^lo_/, "limit order ids start with lo_").describe('Limit order id (starts with "lo_").'),
+    }),
     create_checkout_session: z.object({
       amount: z
         .union([z.string(), z.number()])

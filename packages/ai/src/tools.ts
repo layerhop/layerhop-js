@@ -5,13 +5,14 @@ import { assertAddress, isTxHash } from "./core/address.js";
 import { AmountError, fromBaseUnits, toBaseUnits } from "./core/amounts.js";
 import { EndpointUnavailableError, LayerHopClient } from "./core/client.js";
 import { depositRules, formatBuiltTx, formatDepositAddress, formatDepositEstimate, formatDepositOrder, formatQuoteResponse, type DepositAddressLike, type FormatOptions } from "./core/format.js";
+import { apiErrorText, explainQuoteError, formatGaslessBuild, formatLimitOrder, formatTokenRisk } from "./core/extras.js";
 import { buildSwapLink, DEFAULT_APP_URL } from "./core/links.js";
 import { createResolvers, QuoteCache, UserInputError } from "./core/resolve.js";
 import { API_KEY_MISSING, DEPOSIT_WARNING, NO_KEYS } from "./core/safety.js";
 import { SandboxTxError, toTransactionRequests } from "./core/txs.js";
 import { TOOL_NAMES, zodV4Schemas, type ToolName, type ToolSchemas } from "./schemas.js";
 
-export const VERSION = "0.7.0";
+export const VERSION = "0.8.0";
 const DEFAULT_API_URL = "https://api.layerhop.com";
 const INTEGRATOR_RE = /^[a-z0-9-]{1,32}$/;
 
@@ -79,9 +80,7 @@ export interface LayerHopToolset {
 
 /** Turn any thrown error into the text the model sees (same wording as the MCP server). */
 export function errorMessage(e: unknown): string {
-  if (e instanceof LayerHopApiError) {
-    return `LayerHop API error ${e.code} (HTTP ${e.status}): ${e.message}${e.requestId ? ` [requestId ${e.requestId}]` : ""}. See https://docs.layerhop.com/errors/${e.code}`;
-  }
+  if (e instanceof LayerHopApiError) return apiErrorText(e);
   if (e instanceof EndpointUnavailableError || e instanceof AmountError || e instanceof UserInputError || e instanceof SandboxTxError) return e.message;
   return e instanceof Error ? e.message : String(e);
 }
@@ -188,6 +187,27 @@ export function createLayerHopTools(opts: LayerHopToolsOptions = {}): LayerHopTo
       description: `Get one deposit address with its 20 most recent deposits: amount deposited and delivered, status (submitted, pending, filled, refunded, failed) and tx hashes. ${DEPOSIT_WARNING} Read-only.`,
       annotations: RO,
     },
+    lookup_token: {
+      title: "Look up a token by address",
+      description:
+        "Get one token's symbol, name, decimals, USD price and verified flag from its contract address or SPL mint. The chain is optional: LayerHop finds it (Solana for a mint, else the EVM chain where the token has the most liquidity). verified false means it is on no curated list: confirm the address with the user before swapping. Read-only.",
+      annotations: RO,
+    },
+    get_token_risk: {
+      title: "Check a token for risks",
+      description: `Safety report for a token before the user buys or receives it: honeypot (can't sell), buy/sell/transfer taxes, owner powers (mint, blacklist, pause, freeze), unpublished code, few holders, and fake majors (a token calling itself USDC/ETH/SOL at the wrong address). level is ok, caution, danger or unknown (no source answered; never block a swap on unknown alone). On danger, warn the user and get explicit confirmation before ${t("get_quote")}. Read-only.`,
+      annotations: RO,
+    },
+    list_limit_orders: {
+      title: "List Solana limit orders",
+      description: "List Solana limit orders (Jupiter Trigger) of a wallet, or of the API key's account without a wallet: what is sold, the minimum received, status (built, open, filled, cancelled, expired, failed) and fills. Read-only.",
+      annotations: RO,
+    },
+    get_limit_order: {
+      title: "Get a Solana limit order",
+      description: "Get one Solana limit order with its fills (each fill is an order whose quoteId starts with lof_). Read-only.",
+      annotations: RO,
+    },
     create_checkout_session: {
       title: "Create a checkout session (accept a payment)",
       description: `Create a hosted LayerHop checkout page where a payer pays an amount with any token on any supported chain; the merchant receives USDC or USDT on settleChain at recipient. Returns the checkout url to send the payer to. Needs a LayerHop API key. Non-custodial. ${NO_KEYS}`,
@@ -251,7 +271,11 @@ export function createLayerHopTools(opts: LayerHopToolsOptions = {}): LayerHopTo
       const amountBaseUnits = toBaseUnits(a.amount, srcToken.decimals);
       const amount = fromBaseUnits(amountBaseUnits, srcToken.decimals);
       const slippageBps = a.slippageBps ?? 50;
-      const res = await client.quote({ srcChain: src.id, srcToken: srcToken.address, amount: amountBaseUnits, dstChain: dst.id, dstToken: dstToken.address, sender, recipient, slippageBps });
+      const res = await client
+        .quote({ srcChain: src.id, srcToken: srcToken.address, amount: amountBaseUnits, dstChain: dst.id, dstToken: dstToken.address, sender, recipient, slippageBps, ...(a.gasless ? { gasless: true } : {}) })
+        .catch(async (e: unknown) => {
+          throw await explainQuoteError(e, client, { toolName: t, srcDecimals: srcToken.decimals, srcSymbol: srcToken.symbol });
+        });
       const base = { srcChain: src, dstChain: dst, srcToken, dstToken, amount, amountBaseUnits, sender, recipient, slippageBps };
       for (const q of res.quotes.length ? res.quotes : [res.best]) quotes.set({ ...base, quoteId: q.quoteId, provider: q.provider, expiresAt: q.expiresAt });
       const link = buildSwapLink(
@@ -273,6 +297,10 @@ export function createLayerHopTools(opts: LayerHopToolsOptions = {}): LayerHopTo
 
     build_transaction: async ({ quoteId }) => {
       const [built, chains] = await Promise.all([client.buildOrder(quoteId), client.chains()]);
+      if (!built.tx) {
+        if (built.gasless) return formatGaslessBuild(built.gasless, built.provider, quoteId, quotes.get(quoteId), fmt);
+        throw new Error(`The API returned no transaction for quote ${quoteId}. Get a fresh quote with ${t("get_quote")}.`);
+      }
       const out = formatBuiltTx(built.tx, built.provider, quoteId, quotes.get(quoteId), r.chainNameById(chains), apiUrl, fmt);
       return {
         ...out,
@@ -328,6 +356,7 @@ export function createLayerHopTools(opts: LayerHopToolsOptions = {}): LayerHopTo
         refunded: "The swap did not complete and funds were refunded to the sender.",
         failed: "The swap failed. Check the source transaction on an explorer.",
         unknown: "The provider does not track this tx (common for same-chain swaps). Check the transaction on a block explorer.",
+        dropped: "The source transaction never reached the network; no funds moved. Stop checking and get a new quote.",
       };
       return { ...s, meaning: meaning[s.state] ?? s.state, srcExplorer: explorer(s.srcTxHash), dstExplorer: explorer(s.dstTxHash) };
     },
@@ -398,6 +427,37 @@ export function createLayerHopTools(opts: LayerHopToolsOptions = {}): LayerHopTo
           ? "Deposits are newest first. Each deposit is an order; status filled means the tokens were delivered to recipient."
           : "No deposits detected yet. If the user just sent funds, check again in ~15-30 s.",
       };
+    },
+
+    lookup_token: async (a) => {
+      const chain = a.chain !== undefined ? await r.resolveChain(a.chain) : undefined;
+      const tok = await client.lookupToken(a.address.trim(), chain?.id);
+      const chains = await client.chains();
+      return {
+        token: { ...tok, chain: r.chainNameById(chains)(tok.chainId) },
+        note: tok.verified
+          ? "On a provider or curated list."
+          : `verified false: the token is on no list (read on-chain). Confirm the address with the user and consider ${t("get_token_risk")} before swapping.`,
+      };
+    },
+
+    get_token_risk: async (a) => {
+      const c = await r.resolveChain(a.chain);
+      const tok = await r.resolveTokenLoose(c, a.token);
+      return formatTokenRisk(await client.tokenRisk(c.id, tok.address), c.name);
+    },
+
+    list_limit_orders: async (a) => {
+      if (!a.wallet) requireKey();
+      const res = await client.listLimitOrders({ wallet: a.wallet?.trim(), status: a.status, limit: a.limit, cursor: a.cursor });
+      const lookup = await r.tokenLookup([...new Set(res.limitOrders.map((o) => o.chainId))]);
+      return { count: res.limitOrders.length, limitOrders: res.limitOrders.map((o) => formatLimitOrder(o, lookup)), nextCursor: res.nextCursor ?? null };
+    },
+
+    get_limit_order: async ({ id }) => {
+      const o = await client.getLimitOrder(id);
+      const lookup = await r.tokenLookup([o.chainId]);
+      return { limitOrder: formatLimitOrder(o, lookup), fills: o.fills ?? [] };
     },
 
     create_checkout_session: async (a) => {
