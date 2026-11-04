@@ -11,6 +11,7 @@
  */
 import { autoInitCheckout, type CheckoutDefaults } from "./checkout-auto-init";
 import {
+  closeCheckout,
   createProductSession as createSession,
   mountCheckout,
   openCheckout,
@@ -59,6 +60,21 @@ export function autoInit(root: ParentNode = document) {
 }
 
 export { closeCheckout as close, buildCheckoutUrl, buildBuyUrl, getProduct, LayerHopCheckoutError } from "./checkout";
+
+/**
+ * `LayerHop.checkout.{open, mount, close}`: the same functions under the `window.LayerHop` namespace
+ * the swap widget script (embed.js) uses, so `LayerHop.checkout.mount(el, { sessionId })` works with
+ * checkout.js alone or next to embed.js (embed.js's own `checkout` delegates here).
+ */
+export const checkoutNamespace = { open, mount, close: closeCheckoutFn, createProductSession };
+function closeCheckoutFn() {
+  closeCheckout();
+}
+if (typeof window !== "undefined") {
+  const w = window as unknown as { LayerHop?: { checkout?: unknown } };
+  w.LayerHop = w.LayerHop ?? {};
+  if (!w.LayerHop.checkout) w.LayerHop.checkout = checkoutNamespace;
+}
 
 if (typeof document !== "undefined") {
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => autoInit(), { once: true });

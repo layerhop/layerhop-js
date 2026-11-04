@@ -81,6 +81,10 @@ export interface CheckoutMessagePayloads {
   paid: { session: CheckoutSession };
   cancel: Record<never, never>;
   close: Record<never, never>;
+  /** The session expired before it was paid. */
+  expired: Record<never, never>;
+  /** The checkout can't be shown (`NOT_FOUND`: unknown session; `UNAVAILABLE`: LayerHop couldn't load it). */
+  error: { code: string; message: string };
 }
 export type CheckoutMessageType = keyof CheckoutMessagePayloads;
 export type CheckoutMessage<T extends CheckoutMessageType = CheckoutMessageType> = {
@@ -98,8 +102,13 @@ export interface CheckoutCallbacks {
   onClose?: () => void;
   /** Every session status change: open → processing → paid (or expired / needs_review). */
   onStatus?: (status: CheckoutStatus) => void;
-  /** The session couldn't be started (createProductSession failed) or the options were invalid. */
+  /**
+   * The session couldn't be started (createProductSession failed), the options were invalid, or the
+   * frame reported it can't show the session (`code` NOT_FOUND / UNAVAILABLE).
+   */
   onError?: (error: LayerHopCheckoutError) => void;
+  /** The session expired before it was paid (the frame shows "expired"; start a new session to retry). */
+  onExpired?: () => void;
 }
 
 export interface CheckoutOptions extends CheckoutCallbacks {
@@ -117,7 +126,11 @@ export interface CheckoutOptions extends CheckoutCallbacks {
   apiUrl?: string;
   /** iframe title (accessible name). Default "LayerHop checkout". */
   title?: string;
+  /** Checkout colors: `dark` (default), `light`, or `auto` (follows the payer's system setting). */
+  theme?: CheckoutTheme;
 }
+
+export type CheckoutTheme = "dark" | "light" | "auto";
 
 export interface MountCheckoutOptions extends CheckoutOptions {
   /** Follow the checkout's height (default true). */
@@ -179,16 +192,22 @@ export interface CheckoutUrlOptions {
   mode?: "inline" | "modal";
   /** Your page's origin, used as the frame's postMessage targetOrigin. */
   origin?: string;
+  /** `dark` (default, omitted from the URL), `light` or `auto`. */
+  theme?: CheckoutTheme;
 }
+
+const THEMES: readonly CheckoutTheme[] = ["dark", "light", "auto"];
 
 /** `https://layerhop.com/pay/cs_…?embed=1&origin=https%3A%2F%2Fshop.example.com` */
 export function buildCheckoutUrl(sessionId: string, opts: CheckoutUrlOptions = {}): string {
   if (!isCheckoutSessionId(sessionId)) throw new LayerHopCheckoutError(`Invalid sessionId "${sessionId}": expected cs_…`);
+  if (opts.theme !== undefined && !THEMES.includes(opts.theme)) throw new LayerHopCheckoutError(`Invalid theme "${opts.theme}": expected dark, light or auto`);
   const u = httpBase("baseUrl", opts.baseUrl ?? DEFAULT_BASE_URL);
   u.pathname = `${u.pathname.replace(/\/+$/, "")}/pay/${encodeURIComponent(sessionId)}`;
   u.searchParams.set("embed", opts.mode === "modal" ? "modal" : "1");
   const origin = opts.origin && /^https?:\/\/[^/]+$/.test(opts.origin) ? opts.origin : undefined;
   if (origin) u.searchParams.set("origin", origin);
+  if (opts.theme && opts.theme !== "dark") u.searchParams.set("theme", opts.theme);
   return u.toString();
 }
 
@@ -214,7 +233,12 @@ export function parseCheckoutMessage(data: unknown): CheckoutMessage | null {
     case "ready":
     case "cancel":
     case "close":
-      return { ...base, type: data.type } as CheckoutMessage<"ready" | "cancel" | "close">;
+    case "expired":
+      return { ...base, type: data.type } as CheckoutMessage<"ready" | "cancel" | "close" | "expired">;
+    case "error":
+      return typeof data.code === "string" && /^[A-Z_]{1,40}$/.test(data.code) && typeof data.message === "string"
+        ? { ...base, type: "error", code: data.code, message: data.message.slice(0, 300) }
+        : null;
     case "resize":
       return typeof data.height === "number" && Number.isFinite(data.height) && data.height > 0 && data.height < 20_000 ? { ...base, type: "resize", height: data.height } : null;
     case "status":
@@ -390,7 +414,7 @@ export function mountCheckout(target: HTMLElement | string, opts: MountCheckoutO
       if (closed) return;
       sid = id;
       const origin = checkoutOrigin(opts.baseUrl);
-      iframe = createFrame(buildCheckoutUrl(id, { baseUrl: opts.baseUrl, mode: "inline", origin: pageOrigin() }), opts.title);
+      iframe = createFrame(buildCheckoutUrl(id, { baseUrl: opts.baseUrl, mode: "inline", origin: pageOrigin(), theme: opts.theme }), opts.title);
       iframe.style.maxWidth = px(opts.maxWidth ?? CHECKOUT_DEFAULT_MAX_WIDTH);
       iframe.style.height = px(opts.height ?? CHECKOUT_DEFAULT_HEIGHT);
       iframe.style.marginInline = "auto";
@@ -402,6 +426,8 @@ export function mountCheckout(target: HTMLElement | string, opts: MountCheckoutO
           case "paid": return opts.onPaid?.(msg.session);
           case "cancel": return opts.onCancel?.();
           case "close": return; // inline frames have no close button
+          case "expired": return opts.onExpired?.();
+          case "error": return reportError(opts, new LayerHopCheckoutError(msg.message, msg.code));
         }
       });
       container.appendChild(iframe);
@@ -597,7 +623,7 @@ export function openCheckout(opts: CheckoutOptions): CheckoutHandle {
       if (closed) return;
       sid = id;
       const origin = checkoutOrigin(opts.baseUrl);
-      iframe = createFrame(buildCheckoutUrl(id, { baseUrl: opts.baseUrl, mode: "modal", origin: pageOrigin() }), opts.title);
+      iframe = createFrame(buildCheckoutUrl(id, { baseUrl: opts.baseUrl, mode: "modal", origin: pageOrigin(), theme: opts.theme }), opts.title);
       const reveal = () => {
         if (closed || status.hidden) return;
         const hadFocus = overlay.contains(doc.activeElement);
@@ -621,6 +647,10 @@ export function openCheckout(opts: CheckoutOptions): CheckoutHandle {
           case "cancel":
             opts.onCancel?.();
             return handle.close();
+          case "expired":
+            return opts.onExpired?.();
+          case "error":
+            return reportError(opts, new LayerHopCheckoutError(msg.message, msg.code));
           case "close":
             return handle.close();
         }

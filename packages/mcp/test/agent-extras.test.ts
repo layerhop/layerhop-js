@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { COW_NATIVE_BUY_TOKEN, COW_VAULT_RELAYER, EVM_NATIVE, cowAppData, cowCancellationTypedData, cowOrderTypedData, cowOrderUid, type CowOrder } from "@layerhop/shared";
 import { connect, data, EVM, mockApi, SOL, text } from "./helpers.js";
 
 const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -85,6 +86,40 @@ describe("limit orders", () => {
     expect(api.calls.find((x) => x.url.pathname === "/v1/limit-orders/lo_1/submit")!.body).toEqual({ signedTransaction: "c2lnbmVk" });
     const k = data(await call("cancel_limit_order", { id: "lo_1" }));
     expect(k.unsignedTransaction.serializedTx).toBe("Y2FuY2Vs");
+  });
+
+  it("EVM (CoW): returns checked typed data + approval, relays the signature, refuses tampered typed data", async () => {
+    const FEE_TO = "0xAA857ee7176bfc34Dd8a792de13934ed9541eD36";
+    const { appData, appDataHash } = cowAppData({ bps: 20, recipient: FEE_TO });
+    const message: CowOrder = {
+      sellToken: BASE_USDC, buyToken: COW_NATIVE_BUY_TOKEN, receiver: EVM.toLowerCase(), sellAmount: "50000000", buyAmount: "20000000000000000",
+      validTo: Math.floor(Date.now() / 1000) + 86_400, appData: appDataHash, feeAmount: "0", kind: "sell", partiallyFillable: false, sellTokenBalance: "erc20", buyTokenBalance: "erc20",
+    };
+    const uid = cowOrderUid(8453, message, EVM);
+    const evmOrder = order({ provider: "cow", chainId: 8453, wallet: EVM.toLowerCase(), srcToken: BASE_USDC, dstToken: EVM_NATIVE, amount: "50000000", dstAmount: "20000000000000000", fees: { ourFeeBps: 20, integratorFeeBps: 0, integrator: null }, providerOrderId: uid });
+    let typedData = cowOrderTypedData(8453, message);
+    const api = mockApi([
+      (c) => (c.url.pathname === "/v1/limit-orders" && c.method === "POST" ? { body: { ...evmOrder, tx: null, typedData, appData, approval: { token: BASE_USDC, spender: COW_VAULT_RELAYER, amount: "50000000" } } } : undefined),
+      (c) => (c.url.pathname === "/v1/limit-orders/lo_1/submit" ? { body: { limitOrder: { ...evmOrder, status: "open" }, txHash: null } } : undefined),
+      (c) => (c.url.pathname === "/v1/limit-orders/lo_1/cancel" ? { body: { limitOrder: { ...evmOrder, status: "open" }, tx: null, typedData: cowCancellationTypedData(8453, [uid]) } } : undefined),
+    ]);
+    const { call } = await connect(api.fetch);
+    const args = { chain: "base", wallet: EVM, sellToken: "USDC", sellAmount: "50", buyToken: "ETH", minReceive: "0.02" };
+    const c = data(await call("create_limit_order", args));
+    expect(api.calls.find((x) => x.url.pathname === "/v1/limit-orders")!.body).toMatchObject({ chain: "8453", wallet: EVM, srcToken: BASE_USDC, amount: "50000000", dstAmount: "20000000000000000" });
+    expect(c).toMatchObject({ approval: { spender: COW_VAULT_RELAYER }, typedData: { primaryType: "Order" } });
+    expect(c.signing.steps.at(-1)).toMatch(/submit_limit_order.*signature/);
+    const sig = `0x${"1".repeat(130)}`;
+    data(await call("submit_limit_order", { id: "lo_1", signature: sig }));
+    expect(api.calls.find((x) => x.url.pathname === "/v1/limit-orders/lo_1/submit")!.body).toEqual({ signature: sig });
+    expect((await call("submit_limit_order", { id: "lo_1" })).isError).toBe(true);
+    const k = data(await call("cancel_limit_order", { id: "lo_1" }));
+    expect(k.typedData.primaryType).toBe("OrderCancellations");
+    // a receiver that is not the wallet is refused before anyone signs
+    typedData = cowOrderTypedData(8453, { ...message, receiver: FEE_TO });
+    const bad = await call("create_limit_order", args);
+    expect(bad.isError).toBe(true);
+    expect(text(bad)).toMatch(/receiver is not your wallet/);
   });
 
   it("needs a wallet or an API key to list", async () => {

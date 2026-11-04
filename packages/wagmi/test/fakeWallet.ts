@@ -84,6 +84,15 @@ export function fakeWallet(opts: FakeWalletOptions = {}) {
         return null;
       case "eth_estimateGas":
         return "0x5208";
+      // Fee reads (a `speed`): base fee 10 gwei, tips 1-2 gwei at p75 and 3-5 gwei at p95.
+      case "eth_feeHistory":
+        return { oldestBlock: "0x10", baseFeePerGas: ["0x2540be400", "0x2540be400"], gasUsedRatio: [0.5], reward: [["0x77359400", "0xee6b2800"]] };
+      case "eth_maxPriorityFeePerGas":
+        return "0x3b9aca00";
+      case "eth_gasPrice":
+        return "0x28fa6ae00";
+      case "eth_getBlockByNumber":
+        return { baseFeePerGas: "0x2540be400", number: "0x20", hash: hashOf(1), timestamp: "0x1", transactions: [] };
       default:
         throw Object.assign(new Error(`fake wallet: unexpected ${method}`), { code: -32601 });
     }

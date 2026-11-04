@@ -66,6 +66,15 @@ describe("shared", () => {
     // ...but a big enough output advantage still wins
     expect(rankQuotes([q("lifi", "101000000", 1080), q("relay", "99667084", 1)])[0]!.provider).toBe("lifi");
   });
+  it("exact output: a 1-second route wins over an 18-minute one up to 1.5% dearer (Base → Arbitrum, $1.50)", () => {
+    const x = (provider: ProviderQuote["provider"], srcAmount: string, eta: number) => ({ ...q(provider, "1503759", eta), srcAmount });
+    expect(rankQuotes([x("lifi", "1515071", 1080), x("relay", "1529274", 1), x("debridge", "1796957", 1)]).map((r) => r.provider)).toEqual(["relay", "lifi", "debridge"]);
+    // the cheaper route still wins when both are fast, and when the fast one costs more than the cap
+    expect(rankQuotes([x("lifi", "1518509", 2), x("relay", "1525417", 2)])[0]!.provider).toBe("lifi");
+    expect(rankQuotes([x("lifi", "1515071", 1080), x("relay", "1540000", 1)])[0]!.provider).toBe("lifi");
+    // same input: the faster wins
+    expect(rankQuotes([x("lifi", "1500000", 600), x("relay", "1500000", 5)])[0]!.provider).toBe("relay");
+  });
   it("serializes errors with docs url", () => {
     const e = new LayerHopError("NO_ROUTE", "none");
     expect(e.status).toBe(404);

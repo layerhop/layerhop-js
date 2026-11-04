@@ -1,13 +1,13 @@
 import { verifyWebhookSignature } from "@layerhop/shared";
 import type {
-  BalancesResponse, BuiltTx, ChainInfo, FeeBreakdown, FeeChannel, GasOnArrival, GaslessSignatures, GaslessSignRequest, OrderState, OrderStatus, PricesResponse, ProviderId, RouteSuggestion, SvmTx, TokenInfo, TokenRisk, TokensResponse,
+  Eip712TypedData, BalancesResponse, BuiltTx, ChainInfo, FeeBreakdown, FeeChannel, GasOnArrival, GaslessSignatures, GaslessSignRequest, OrderState, OrderStatus, PricesResponse, ProviderId, RouteSuggestion, SvmTx, TokenInfo, TokenRisk, TokensResponse,
 } from "@layerhop/shared";
 
 export type {
   BuiltTx, EvmTx, EvmCall, SvmTx, TronTx, TronCall, TronApproval, TronUnsignedTx, Vm, WalletVm, OrderStatus, ProviderId, FeeChannel, FeeBreakdown, GasOnArrival,
   Eip712TypedData, GaslessSignable, GaslessSignRequest, GaslessSignatures,
   ChainInfo, OnlyRoute, TokenInfo, Balance, TokensResponse, PricesResponse, BalancesResponse,
-  ChainRouteHealth, RouteHealthState, RouteHealthStatus, GaslessExpectation,
+  ChainRouteHealth, RouteHealthState, RouteHealthStatus, GaslessExpectation, CowOrder, CowOrderExpectation,
 } from "@layerhop/shared";
 
 /**
@@ -32,12 +32,19 @@ export interface NoRouteDetails {
 export type { RouteLeg, RouteSuggestion, RouteSuggestionKind } from "@layerhop/shared";
 export type { TokenRisk, TokenRiskCode, TokenRiskLevel, TokenRiskReason } from "@layerhop/shared";
 export { parseRouteSuggestions } from "@layerhop/shared";
+export type { AvoidableVenue, VenueKind } from "@layerhop/shared";
+export { AVOIDABLE_VENUES, EXCLUDABLE_PROVIDERS } from "@layerhop/shared";
 export {
   CHAINS, TOKENS, getChain, findToken, SOLANA_CHAIN_ID, EVM_NATIVE, SOL_NATIVE, HYPERLIQUID_CHAIN_ID,
   gasOnArrivalApplies, DEFAULT_GAS_ON_ARRIVAL_USD, gaslessApplies, GASLESS_CHAIN_IDS, gaslessProblems, PERMIT2_ADDRESS, GASLESS_MAX_DEADLINE_S,
+  COW_CHAINS, COW_SETTLEMENT, COW_VAULT_RELAYER, COW_MAX_FEE_BPS, isCowChain, cowOrderProblems, cowCancellationProblems, cowOrderUid,
   SETTLEMENT_TOKENS, findSettlementToken, SANDBOX_MAGIC_AMOUNTS,
   verifyWebhookSignature, WEBHOOK_SIGNATURE_HEADER, WEBHOOK_EVENT_HEADER, WEBHOOK_DELIVERY_HEADER,
 } from "@layerhop/shared";
+// x402 pay-per-request middleware (D-066).
+export { x402 } from "./x402.js";
+export type { X402Options, X402Requirements, X402SettleResponse, X402Check, HonoLikeContext, ExpressLikeRequest, ExpressLikeResponse } from "./x402.js";
+export { X402_NETWORKS, X402_HEADERS, encodeX402Header, decodeX402Header } from "@layerhop/shared";
 
 export interface LayerHopOptions {
   /** Defaults to https://api.layerhop.com */
@@ -108,6 +115,22 @@ export interface QuoteParams {
   splitShare?: number;
   /** A message to the recipient on a tip or split payment (plain text, at most 140 characters). */
   note?: string;
+  /** Never ask these providers (ids from `EXCLUDABLE_PROVIDERS`, e.g. `"relay"`). Never changes the fee. */
+  excludeProviders?: string[];
+  /** Never route through these bridges (ids from `AVOIDABLE_VENUES` with `kind: "bridge"`, e.g. `"stargate"`). */
+  excludeBridges?: string[];
+  /** Never swap through these exchanges (ids from `AVOIDABLE_VENUES` with `kind: "exchange"`, e.g. `"1inch"`). */
+  excludeExchanges?: string[];
+}
+
+/**
+ * Receive an exact amount: `dstAmount` is what the recipient gets; each quote reports `srcAmount`
+ * (what the sender pays) and `srcAmountMax` (the most the tx can take, for balance checks). Only
+ * providers that quote a fixed output answer. Not with gas on arrival or gasless.
+ */
+export interface ExactOutputQuoteParams extends Omit<QuoteParams, "amount" | "gasOnArrival" | "gasless"> {
+  /** The exact amount of `dstToken` the recipient receives (base units). */
+  dstAmount: string;
 }
 
 /**
@@ -154,8 +177,10 @@ export interface Quote {
   expiresAt: number;
   /** Native gas delivered to the recipient on top of `dstAmount` (when requested and included). */
   gasOnArrival?: GasOnArrival;
-  /** What the sender pays (base units of srcToken), on destination-call quotes. */
+  /** What the sender pays (base units of srcToken), on exact-output quotes (`dstAmount`, destination calls). */
   srcAmount?: string;
+  /** Exact-output quotes: the most the transaction can take from the sender, slippage included (>= srcAmount). */
+  srcAmountMax?: string;
   /** Destination calls the provider will run (when the request had `calls` / `action`). */
   calls?: DestinationCallsPlan;
   /** Gasless quotes: the gas fee taken from the input token, and whether an approval signature comes first. */
@@ -180,6 +205,44 @@ export interface QuoteResponse {
   warnings?: { code: string; message: string }[];
   /** false when the request used an `lh_test_` key (sandbox quotes). */
   livemode?: boolean;
+  /** Address screening (D-069): listed addresses of this request; present once the API has a list loaded. */
+  screening?: ScreeningAnnotation;
+}
+
+/** Address screening on quotes, orders and checkout quotes: which addresses are on the OFAC SDN list. */
+export interface ScreeningAnnotation {
+  source: "ofac_sdn";
+  listUpdatedAt: string | null;
+  sanctioned: { address: string; role: "sender" | "recipient" | "refundTo" | "payer" | "payout"; lists: string[] }[];
+}
+
+/** `POST /v1/screen`: one address's result. */
+export interface ScreeningResult {
+  address: string;
+  sanctioned: boolean;
+  /** Lists the address is on (`"OFAC SDN"`), empty when not listed. */
+  lists: string[];
+  source: "ofac_sdn";
+  /** Publish date of the list checked; null while the API has no list loaded. */
+  listUpdatedAt: string | null;
+}
+
+export interface ScreenResponse {
+  results: ScreeningResult[];
+  list: { source: "ofac_sdn"; name: string; publishedAt: string | null; fetchedAt: string; addressCount: number } | null;
+  /** The API refuses listed addresses for everyone (`ADDRESS_SANCTIONED`). */
+  enforced: boolean;
+}
+
+/** One `quote` event of `quotes.stream()`: a full quote response plus its sequence number. */
+export interface QuoteStreamUpdate extends QuoteResponse {
+  seq: number;
+}
+
+export interface QuoteStreamOptions {
+  /** Refresh interval in ms (default 10000, minimum 5000). Each refresh counts as one request against your rate limit. */
+  intervalMs?: number;
+  signal?: AbortSignal;
 }
 
 /** Lifecycle of an order recorded by the API (docs/PLATFORM_SPEC.md "Orders"). */
@@ -294,6 +357,8 @@ export interface CreateCheckoutParams {
   cancelUrl?: string;
   /** 5–10080, default 60. */
   expiresInMinutes?: number;
+  /** Embedded checkout: the only sites (exact origins) that may show the session in an iframe. Empty = any. */
+  embedOrigins?: string[];
 }
 
 export interface CheckoutSession {
@@ -319,7 +384,10 @@ export interface CheckoutSession {
   cancelUrl: string | null;
   expiresAt: string;
   payment: {
-    quoteId: string;
+    /** "wallet": paid through a quote on the page; "transfer": a scan-to-pay transfer (D-064), no quote. */
+    method?: "wallet" | "transfer";
+    /** null for a scan-to-pay transfer. */
+    quoteId: string | null;
     payer: string | null;
     srcChainId: number | null;
     srcToken: string | null;
@@ -333,8 +401,74 @@ export interface CheckoutSession {
   metadata?: Record<string, string> | null;
   /** Only when paid plans are enabled: false when the merchant's plan is white-label (hide LayerHop branding). */
   branding?: boolean;
+  /** The payer can be shown a "Send to address" QR (`checkout.startTransfer`). */
+  transferAvailable?: boolean;
+  /** Scan-to-pay state once the payer asked for a QR, else null. */
+  transfer?: CheckoutTransfer | null;
+  /** Sites allowed to embed this checkout (empty = any). */
+  embedOrigins?: string[];
+  /** "Pay with Bitcoin" (D-067; only present where the API enabled it): can this session show a BTC deposit address. */
+  bitcoinAvailable?: boolean;
+  /** The Bitcoin payment once the payer asked for it (`checkout.startBitcoin`), else null. */
+  bitcoin?: CheckoutBitcoin | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * "Pay with Bitcoin" (D-067): send exactly `amountSats` (`amountBtc`) to `address`, a Relay deposit
+ * address bound to this payment; the merchant receives `amountOut` of the settlement token. `uri` is
+ * the BIP21 payment request for the QR. After `expiresAt` ask `startBitcoin` again for a fresh quote.
+ */
+export interface CheckoutBitcoin {
+  address: string;
+  amountSats: string;
+  amountBtc: string;
+  uri: string;
+  amountOut: string;
+  expiresAt: string;
+  expired: boolean;
+  /** Relay status: waiting, depositing, pending, submitted, success, failure or refund. */
+  status: string;
+  /** Satoshis seen at `address` (mempool included). */
+  seenSats: string;
+  requestId: string;
+  feeBps: number;
+  refundAddress: string | null;
+  quotes: { address: string; amountSats: string; status: string; requestId: string; createdAt: string }[];
+}
+
+/**
+ * Scan-to-pay ("Send to address", D-064). `evm_transfer`: send exactly `amount` of `token` to
+ * `address` on `chainId` (the amount carries a tag in its sub-cent digits). `solana_pay`: scan `uri`
+ * (a Solana Pay transaction request) with a Solana wallet. `evm_splitter` (D-065): send exactly
+ * `amount` to `address`, the session's own fee-splitting deposit address (amount due + fee).
+ */
+export interface CheckoutTransfer {
+  kind: "evm_transfer" | "solana_pay" | "evm_splitter";
+  chainId: number;
+  token: string;
+  symbol: string;
+  decimals: number;
+  address: string;
+  /** What to send now, base units (EVM: the exact tagged amount; after a short payment, the tagged rest). */
+  amount: string;
+  amountDue: string;
+  /** LayerHop's fee on top, inside the same Solana Pay transaction. */
+  fee: { bps: number; amount: string } | null;
+  /** QR payload: EIP-681 (EVM) or `solana:https://…/solana-pay` (Solana Pay transaction request). */
+  uri: string;
+  /** Solana Pay transfer request (plain transfer), only when enabled. */
+  transferUri: string | null;
+  reference: string | null;
+  /** Confirmed so far, and seen but still confirming. */
+  received: string;
+  seen: string;
+  state: "waiting" | "partial" | "paid" | "overpaid";
+  txs: { hash: string; amount: string; at: string | null }[];
+  startedAt: string;
+  /** `evm_splitter` only: the sweep that paid the deposit out to the merchant. */
+  sweepTxHash?: string | null;
 }
 
 export interface CreateCheckoutProductParams {
@@ -658,19 +792,19 @@ export interface DepositAddressList {
 export type LimitOrderStatus = "built" | "open" | "filled" | "cancelled" | "expired" | "failed";
 
 export interface CreateLimitOrderParams {
-  /** The maker wallet (base58): signs the order and receives the output. */
+  /** The maker wallet (base58 on Solana, 0x on EVM): signs the order and receives the output. */
   wallet: string;
-  /** Token to sell: mint, curated symbol (`USDC`) or `SOL`. */
+  /** Token to sell: mint / address or curated symbol (`USDC`, `SOL`). EVM: an ERC-20, not the native coin. */
   srcToken: string;
-  /** Token to buy. Our fee applies when it is SOL, USDC or USDT. */
+  /** Token to buy. Solana: our fee applies when it is SOL, USDC or USDT. EVM: any token. */
   dstToken: string;
   /** Base units of `srcToken` to sell (worth at least $5). */
   amount: string;
   /** Minimum base units of `dstToken` for the whole `amount`: the limit price is `dstAmount / amount`. */
   dstAmount: string;
-  /** Unix seconds, at least 60 s ahead. Omit for good-till-cancelled. */
+  /** Unix seconds, at least 60 s ahead. Solana: omit for good-till-cancelled. EVM: at most 365 days, default 90. */
   expiresAt?: number;
-  /** Only `solana` for now (the default). */
+  /** `solana` (the default) or an EVM chain with CoW Protocol (`base`, `arbitrum`, `ethereum`, … or the id; see `COW_CHAINS`). */
   chain?: string | number;
   /** Up to 20 string key-value pairs. */
   metadata?: Record<string, string>;
@@ -680,14 +814,14 @@ export interface CreateLimitOrderParams {
   integratorFeeBps?: number;
 }
 
-/** A Solana limit order (Jupiter Trigger). Fills are orders whose `quoteId` starts with `lof_`. */
+/** A limit order (Solana: Jupiter Trigger; EVM: CoW Protocol). Fills are orders whose `quoteId` starts with `lof_`. */
 export interface LimitOrder {
   id: string;
   object: "limit_order";
   livemode: boolean;
   status: LimitOrderStatus;
   statusDetail: string | null;
-  /** `jupiter` (live) or `sandbox` (test mode). */
+  /** `jupiter` (Solana), `cow` (EVM) or `sandbox` (test mode). */
   provider: string;
   chainId: number;
   wallet: string;
@@ -703,7 +837,7 @@ export interface LimitOrder {
   filledDstAmount: string;
   fillCount: number;
   openTxHash: string | null;
-  /** Set once a cancel tx was submitted; the status turns `cancelled` when the provider confirms. */
+  /** Solana: set once a cancel tx was submitted; the status turns `cancelled` when the provider confirms. EVM: always null (see `statusDetail: "cancel requested"`). */
   cancelTxHash: string | null;
   channel: FeeChannel;
   metadata: Record<string, string> | null;
@@ -711,10 +845,25 @@ export interface LimitOrder {
   updatedAt: string;
 }
 
-/** `create` response: the order plus the unsigned tx (`submitViaApi: true`) for `wallet` to sign. */
+/**
+ * `create` response. Solana: the unsigned tx (`submitViaApi: true`) for `wallet` to sign. EVM: `tx` is
+ * null; check `typedData` with `cowOrderProblems`, make sure the allowance covers `approval`, then have
+ * `wallet` sign `typedData` (`eth_signTypedData_v4`) and `submit` the signature.
+ */
 export interface LimitOrderCreated extends LimitOrder {
-  tx: SvmTx;
+  tx: SvmTx | null;
+  /** EVM: the CoW order as EIP-712 typed data. */
+  typedData?: Eip712TypedData;
+  /** EVM: the order's full appData JSON (LayerHop's partner fee); `typedData.message.appData` is its hash. */
+  appData?: string;
+  /** EVM: allowance the order needs, to CoW's vault relayer only (exact amount). */
+  approval?: { token: string; spender: string; amount: string };
+  /** EVM test mode: never sent to CoW. */
+  sandbox?: true;
 }
+
+/** What to `submit`: a signed Solana tx (base64, also accepted as a plain string) or an EVM typed-data signature. */
+export type LimitOrderSignature = string | { signedTransaction: string } | { signature: string };
 
 export interface LimitOrderWithFills extends LimitOrder {
   fills: OrderSummary[];
@@ -892,6 +1041,56 @@ export interface WebhookEventPayload {
   data: { order?: OrderSummary; session?: CheckoutSession | null; refund?: Refund; invoice?: Partial<Invoice>; subscription?: Subscription; [k: string]: unknown };
 }
 
+/** `webhooks.resend()` result: the deliveries queued (empty when only open streams get it). */
+export interface WebhookResendResult {
+  eventId: string;
+  type: string;
+  livemode: boolean;
+  deliveries: { id: string; endpointId: string }[];
+}
+
+/** Requests per HTTP status class. */
+export interface StatusClassCounts {
+  "2xx": number;
+  "3xx": number;
+  "4xx": number;
+  "5xx": number;
+}
+
+/** Options for `usage.get()`. Times are ISO 8601 or unix seconds. */
+export interface UsageParams {
+  bucket?: "hour" | "day";
+  from?: string;
+  to?: string;
+  keyId?: string;
+}
+
+/** `GET /v1/usage`: the key's account and mode. Latency percentiles are estimates (null without traffic). */
+export interface UsageReport {
+  bucket: "hour" | "day";
+  from: string;
+  to: string;
+  livemode: boolean;
+  keyId: string | null;
+  totals: { requests: number; errors: number; byStatusClass: StatusClassCounts; avgMs: number | null; p50Ms: number | null; p95Ms: number | null };
+  series: { ts: string; requests: number; errors: number; byStatusClass: StatusClassCounts; p50Ms: number | null; p95Ms: number | null }[];
+  byEndpoint: { group: string; requests: number; errors: number; byStatusClass: StatusClassCounts; avgMs: number | null; p50Ms: number | null; p95Ms: number | null }[];
+  errorCodes: { code: string; count: number; byEndpoint: Record<string, number> }[];
+}
+
+/** One failed request from `usage.errors()`. */
+export interface UsageError {
+  ts: string;
+  keyId: string | null;
+  requestId: string;
+  method: string;
+  path: string;
+  endpointGroup: string;
+  status: number;
+  code: string;
+  latencyMs: number;
+}
+
 /** A token for `prices()`: `"chainId:address"` or `{ chainId, address }`. */
 export type PriceId = string | { chainId: string | number; address: string };
 
@@ -1063,6 +1262,169 @@ export interface PayoutTransfers {
   serializedTx?: string;
 }
 
+// ---- Market data (`/v1/market/*`, Berachain and Robinhood Chain; API key required; off unless the API runs with MARKET_API_LIVE=1) ----
+
+/** `berachain` / 80094 or `robinhood` / 4663. */
+export type MarketChainId = "berachain" | "robinhood" | 80094 | 4663 | (string & {});
+export type MarketInterval = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
+export type MarketWindow = "24h" | "7d";
+
+/** A figure over 5 min, 1 h, 6 h, 24 h (and 7 days as `d7` on the 7-day window / token detail). */
+export interface MarketWindowNumbers {
+  m5: number | null;
+  h1: number | null;
+  h6: number | null;
+  h24: number | null;
+  d7?: number | null;
+}
+
+export interface MarketChain {
+  chainId: number;
+  slug: "berachain" | "robinhood";
+  name: string;
+  dexes: string[];
+  intervals: MarketInterval[];
+  /** false when the deployment has no indexer for the chain. */
+  available: boolean;
+}
+
+export interface MarketToken {
+  address: string;
+  symbol: string | null;
+  name: string | null;
+  decimals: number | null;
+  priceUsd: number | null;
+  /** Percent. */
+  change: MarketWindowNumbers;
+  volumeUsd: MarketWindowNumbers;
+  trades: MarketWindowNumbers;
+  /** The main (most traded) pool: use it with candles, trades and traders. */
+  pool: string | null;
+  poolCount: number | null;
+  quoteSymbol: string | null;
+  /** Unix ms. */
+  createdAt: number | null;
+}
+
+export interface MarketTokensParams {
+  sort?: "trending" | "top" | "new" | "gainers";
+  window?: MarketWindow;
+  /** Part of a symbol or name, or a token address. */
+  q?: string;
+  minVolumeUsd?: number;
+  minTrades?: number;
+  limit?: number;
+}
+
+export interface MarketTokenList {
+  chainId: number;
+  window: MarketWindow;
+  sort: string;
+  asOf: number | null;
+  count: number;
+  tokens: MarketToken[];
+}
+
+export interface MarketHolders {
+  chainId: number;
+  token: string;
+  status: "ready" | "syncing" | "waiting_for_rpc" | "failed" | "too_large";
+  holdersCount: number | null;
+  /** Base units. */
+  totalSupply: string | null;
+  decimals: number | null;
+  syncedBlock: number | null;
+  partial: boolean;
+  progress?: number;
+  /** `amount` in base units, `pct` of the total supply. */
+  holders: { address: string; amount: string; pct: number | null; tags: string[] }[];
+}
+
+export interface MarketPool {
+  pool: string;
+  token: { address: string; symbol: string | null; name: string | null };
+  quoteSymbol: string | null;
+  priceUsd: number | null;
+  volumeUsd: number;
+  trades: number;
+}
+
+export interface MarketCandle {
+  /** Candle start, unix seconds. */
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  /** USD. */
+  volume: number;
+}
+
+export interface MarketCandles {
+  chainId: number;
+  pool: string;
+  token: string | null;
+  interval: MarketInterval;
+  indexed: boolean;
+  candles: MarketCandle[];
+}
+
+export interface MarketTrade {
+  /** Unix ms. */
+  time: number;
+  kind: "buy" | "sell";
+  usd: number | null;
+  tokenAmount: number | null;
+  priceUsd: number | null;
+  wallet: string | null;
+  txHash: string;
+  block: number;
+  logIndex: number;
+  zap?: "add" | "remove";
+}
+
+export interface MarketTrades {
+  chainId: number;
+  pool: string;
+  token: string | null;
+  indexed: boolean;
+  trades: MarketTrade[];
+  /** Pass as `before` for older trades; null at the end. */
+  next: string | null;
+  partial: boolean;
+}
+
+export interface MarketTrader {
+  wallet: string;
+  buys: number | null;
+  sells: number | null;
+  boughtUsd: number | null;
+  soldUsd: number | null;
+  /** Base units. */
+  boughtTokens: string | null;
+  soldTokens: string | null;
+  heldTokens: string | null;
+  costBasisUsd: number | null;
+  realizedPnlUsd: number | null;
+  unrealizedPnlUsd: number | null;
+  pnlUsd: number | null;
+  /** Unix ms. */
+  firstTrade: number | null;
+  lastTrade: number | null;
+}
+
+export interface MarketTraders {
+  chainId: number;
+  pool: string;
+  token: string | null;
+  indexed: boolean;
+  asOf: number | null;
+  decimals: number | null;
+  priceUsd: number | null;
+  coverage: { trades: number; withWallet: number; complete: boolean };
+  traders: MarketTrader[];
+}
+
 export class LayerHopApiError extends Error {
   constructor(
     public readonly code: string, message: string, public readonly status: number, public readonly requestId?: string,
@@ -1154,6 +1516,55 @@ export class LayerHop {
     return (await this.call<{ risk: TokenRisk }>(`/tokens/${encodeURIComponent(String(chain))}/${encodeURIComponent(address)}/risk`)).risk;
   }
 
+  // ---- Market data: Berachain and Robinhood Chain from LayerHop's own indexer (API key required) ----
+
+  private market<T>(chain: MarketChainId, path: string, params: Record<string, string | number | undefined> = {}): Promise<T> {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") q.set(k, String(v));
+    const qs = q.toString();
+    return this.call(`/market/${encodeURIComponent(String(chain))}${path}${qs ? `?${qs}` : ""}`);
+  }
+
+  /** Chains with market data (Berachain, Robinhood Chain), their exchanges and candle intervals. */
+  async marketChains(): Promise<MarketChain[]> {
+    return (await this.call<{ chains: MarketChain[] }>("/market/chains")).chains;
+  }
+
+  /** Tokens traded on the chain (trending by default), or a search with `q`. */
+  marketTokens(chain: MarketChainId, p: MarketTokensParams = {}): Promise<MarketTokenList> {
+    return this.market(chain, "/tokens", { ...p });
+  }
+
+  /** One token traded in the last 7 days (`NOT_FOUND` otherwise). */
+  async marketToken(chain: MarketChainId, address: string): Promise<MarketToken> {
+    return (await this.market<{ token: MarketToken }>(chain, `/tokens/${encodeURIComponent(address)}`)).token;
+  }
+
+  /** Largest holders and the holder count; `status: "syncing"` while a new token is counted (ask again shortly). */
+  marketHolders(chain: MarketChainId, address: string, p: { limit?: number } = {}): Promise<MarketHolders> {
+    return this.market(chain, `/tokens/${encodeURIComponent(address)}/holders`, { ...p });
+  }
+
+  /** The most traded pools (each token's main pool) by USD volume. */
+  async marketPools(chain: MarketChainId, p: { window?: MarketWindow; limit?: number } = {}): Promise<MarketPool[]> {
+    return (await this.market<{ pools: MarketPool[] }>(chain, "/pools", { ...p })).pools;
+  }
+
+  /** USD OHLCV candles of a pool, oldest first (`time` in unix seconds). */
+  marketCandles(chain: MarketChainId, pool: string, p: { interval?: MarketInterval; limit?: number; token?: string } = {}): Promise<MarketCandles> {
+    return this.market(chain, `/pools/${encodeURIComponent(pool)}/candles`, { ...p });
+  }
+
+  /** A pool's trades, newest first; page back with `before: page.next`. */
+  marketTrades(chain: MarketChainId, pool: string, p: { limit?: number; before?: string; token?: string } = {}): Promise<MarketTrades> {
+    return this.market(chain, `/pools/${encodeURIComponent(pool)}/trades`, { ...p });
+  }
+
+  /** A pool's top traders by PnL (default), volume, buys or sells. */
+  marketTraders(chain: MarketChainId, pool: string, p: { sort?: "pnl" | "volume" | "buys" | "sells"; days?: "all" | 1 | 7 | 30 | 90; limit?: number; token?: string } = {}): Promise<MarketTraders> {
+    return this.market(chain, `/pools/${encodeURIComponent(pool)}/traders`, { ...p });
+  }
+
   /**
    * Split a bill: `recipient` is owed `total` of `token`, in equal or custom shares. Public, no key.
    * Keep `editToken` (shown only here) to rename shares or close the split with `updateSplit`.
@@ -1212,12 +1623,12 @@ export class LayerHop {
   }
 
   /**
-   * Ask every liquidity provider; `best` is the highest output for the user. With `dstAmount` and
-   * `calls` / `action` (destination calls) this sends `POST /v1/quote`, and only providers that run
-   * calls answer.
+   * Ask every liquidity provider; `best` is the highest output for the user. With `dstAmount` alone
+   * (receive an exact amount) `best` is the lowest `srcAmount`. With `dstAmount` and `calls` /
+   * `action` (destination calls) this sends `POST /v1/quote`, and only providers that run calls answer.
    */
-  quote(p: QuoteParams | CallsQuoteParams): Promise<QuoteResponse> {
-    if ("dstAmount" in p) {
+  quote(p: QuoteParams | ExactOutputQuoteParams | CallsQuoteParams): Promise<QuoteResponse> {
+    if ("dstAmount" in p && ("calls" in p || "action" in p) && (p.calls || p.action)) {
       const body: Record<string, unknown> = {
         srcChain: String(p.srcChain), srcToken: p.srcToken, dstChain: String(p.dstChain), dstToken: p.dstToken,
         dstAmount: p.dstAmount, sender: p.sender, recipient: p.recipient, slippageBps: p.slippageBps ?? 50, channel: this.opts.channel ?? "api",
@@ -1228,10 +1639,16 @@ export class LayerHop {
       if (this.opts.integratorFeeBps !== undefined) body.integratorFeeBps = this.opts.integratorFeeBps;
       if (p.referrer) body.referrer = p.referrer;
       if (p.copyOf) body.copyOf = p.copyOf;
+      for (const k of ["excludeProviders", "excludeBridges", "excludeExchanges"] as const) if (p[k]?.length) body[k] = p[k];
       return this.call("/quote", { method: "POST", body: JSON.stringify(body) });
     }
+    return this.call(`/quote?${this.quoteQuery(p)}`);
+  }
+
+  /** `GET /v1/quote` / `GET /v1/quote/stream` query parameters. */
+  private quoteQuery(p: QuoteParams | ExactOutputQuoteParams): URLSearchParams {
     const q = new URLSearchParams({
-      srcChain: String(p.srcChain), srcToken: p.srcToken, amount: p.amount,
+      srcChain: String(p.srcChain), srcToken: p.srcToken, ...("dstAmount" in p ? { dstAmount: p.dstAmount } : { amount: p.amount }),
       dstChain: String(p.dstChain), dstToken: p.dstToken, sender: p.sender, recipient: p.recipient,
       slippageBps: String(p.slippageBps ?? 50), channel: this.opts.channel ?? "api",
     });
@@ -1239,14 +1656,47 @@ export class LayerHop {
     if (this.opts.integratorFeeBps !== undefined) q.set("integratorFeeBps", String(this.opts.integratorFeeBps));
     if (p.referrer) q.set("referrer", p.referrer);
     if (p.copyOf) q.set("copyOf", p.copyOf);
-    if (typeof p.gasOnArrival === "number") q.set("gasOnArrivalUsd", String(p.gasOnArrival));
-    else if (p.gasOnArrival) q.set("gasOnArrival", "true");
-    if (p.gasless) q.set("gasless", "true");
+    if ("amount" in p) {
+      if (typeof p.gasOnArrival === "number") q.set("gasOnArrivalUsd", String(p.gasOnArrival));
+      else if (p.gasOnArrival) q.set("gasOnArrival", "true");
+      if (p.gasless) q.set("gasless", "true");
+    }
     if (p.purpose) q.set("purpose", p.purpose);
     if (p.splitId !== undefined) q.set("splitId", p.splitId);
     if (p.splitShare !== undefined) q.set("splitShare", String(p.splitShare));
     if (p.note) q.set("note", p.note);
-    return this.call(`/quote?${q}`);
+    for (const k of ["excludeProviders", "excludeBridges", "excludeExchanges"] as const) if (p[k]?.length) q.set(k, p[k]!.join(","));
+    return q;
+  }
+
+  readonly quotes = {
+    /**
+     * Live quotes (`GET /v1/quote/stream`, D-068): an async iterator that yields a fresh ranked quote
+     * set whenever the best route or any amount changes (and before the shown quote expires). Ends
+     * after the stream's lifetime (5 minutes); throws `LayerHopApiError` when a refresh fails (e.g.
+     * `NO_ROUTE`, `RATE_LIMITED`). Break out of the loop or abort `signal` to stop. Same parameters as
+     * `quote()` except destination calls.
+     */
+    stream: (p: QuoteParams | ExactOutputQuoteParams, opts: QuoteStreamOptions = {}): AsyncGenerator<QuoteStreamUpdate> => {
+      const q = this.quoteQuery(p);
+      if (opts.intervalMs !== undefined) q.set("intervalMs", String(opts.intervalMs));
+      return this.quoteStream(`/quote/stream?${q}`, opts.signal);
+    },
+  };
+
+  private async *quoteStream(path: string, signal?: AbortSignal): AsyncGenerator<QuoteStreamUpdate> {
+    for await (const ev of this.streamEvents(path, ["quote", "error", "end"], signal)) {
+      if (ev.event === "quote") yield ev.data as QuoteStreamUpdate;
+      else if (ev.event === "error") {
+        const d = ev.data as { status?: number; error?: { code?: string; message?: string; requestId?: string; details?: Record<string, unknown> } };
+        throw new LayerHopApiError(d.error?.code ?? "INTERNAL", d.error?.message ?? "Quote stream failed", d.status ?? 500, d.error?.requestId, d.error?.details);
+      } else return;
+    }
+  }
+
+  /** `POST /v1/screen`: check up to 100 addresses against the OFAC SDN list (D-069). */
+  screen(addresses: string[]): Promise<ScreenResponse> {
+    return this.call("/screen", { method: "POST", body: JSON.stringify({ addresses }) });
   }
 
   /** Gasless quotes: the EIP-712 typed data to sign (an optional `approval`, then `trade`). Records the order. */
@@ -1321,6 +1771,12 @@ export class LayerHop {
     },
     expire: (id: string): Promise<CheckoutSession> =>
       this.call(`/checkout/sessions/${encodeURIComponent(id)}/expire`, { method: "POST", body: "{}" }),
+    /** Public: show a "Send to address" QR for this session (idempotent); the session with its `transfer`. */
+    startTransfer: (id: string): Promise<CheckoutSession> =>
+      this.call(`/checkout/sessions/${encodeURIComponent(id)}/transfer`, { method: "POST", body: "{}" }),
+    /** Public: show (or refresh, once expired) a Bitcoin deposit address for this session (D-067). */
+    startBitcoin: (id: string, p: { refundAddress?: string } = {}): Promise<CheckoutSession> =>
+      this.call(`/checkout/sessions/${encodeURIComponent(id)}/bitcoin`, { method: "POST", body: JSON.stringify(p) }),
     quote: (id: string, p: CheckoutQuoteParams): Promise<CheckoutQuoteResponse> =>
       this.call(`/checkout/sessions/${encodeURIComponent(id)}/quote`, { method: "POST", body: JSON.stringify(p) }),
     /**
@@ -1478,9 +1934,11 @@ export class LayerHop {
   };
 
   /**
-   * Solana limit orders (beta, Jupiter Trigger). `create` returns an unsigned tx: have `wallet` sign it
-   * (sign only, `tx.submitViaApi`), then `submit` it. `cancel` returns the cancel tx to sign and
-   * `submit` the same way. An API key is optional; `simulate` works with test keys only.
+   * Limit orders (beta). Solana (Jupiter Trigger): `create` returns an unsigned tx; have `wallet` sign
+   * it (sign only, `tx.submitViaApi`), then `submit` it. EVM (CoW Protocol, `chain` = an EVM chain):
+   * `create` returns `typedData` to sign; `submit` the `{ signature }`. `cancel` returns the cancel tx
+   * (Solana) or cancellation `typedData` (EVM) to sign and `submit` the same way. An API key is
+   * optional; `simulate` works with test keys only.
    */
   readonly limitOrders = {
     /** `integrator` / `integratorFeeBps` default to the client options and `channel` to the client channel. */
@@ -1492,9 +1950,12 @@ export class LayerHop {
           ...p, ...(p.chain !== undefined ? { chain: String(p.chain) } : {}),
         }),
       }),
-    /** Send the wallet-signed create or cancel tx (base64). Returns the order and the tx signature. */
-    submit: (id: string, signedTransaction: string): Promise<{ limitOrder: LimitOrder; txHash: string }> =>
-      this.call(`/limit-orders/${encodeURIComponent(id)}/submit`, { method: "POST", body: JSON.stringify({ signedTransaction }) }),
+    /**
+     * Send the wallet's signature of the create or cancel step: the signed Solana tx (base64), or
+     * `{ signature }` for EVM. Returns the order and the tx signature (null for EVM: off chain).
+     */
+    submit: (id: string, signed: LimitOrderSignature): Promise<{ limitOrder: LimitOrder; txHash: string | null }> =>
+      this.call(`/limit-orders/${encodeURIComponent(id)}/submit`, { method: "POST", body: JSON.stringify(typeof signed === "string" ? { signedTransaction: signed } : signed) }),
     /** The order and its fills. */
     get: (id: string): Promise<LimitOrderWithFills> => this.call(`/limit-orders/${encodeURIComponent(id)}`),
     /** Orders of `wallet`, or without it your API key's account. */
@@ -1506,8 +1967,11 @@ export class LayerHop {
       if (p.limit !== undefined) q.set("limit", String(p.limit));
       return this.call(`/limit-orders${q.size ? `?${q}` : ""}`);
     },
-    /** An open order: the cancel tx to sign and `submit`. A never-submitted order is cancelled at once (`tx: null`). */
-    cancel: (id: string): Promise<{ limitOrder: LimitOrder; tx: SvmTx | null }> =>
+    /**
+     * An open order: the cancel tx (Solana) or cancellation `typedData` (EVM) to sign and `submit`.
+     * A never-submitted order is cancelled at once (`tx: null`, no `typedData`).
+     */
+    cancel: (id: string): Promise<{ limitOrder: LimitOrder; tx: SvmTx | null; typedData?: Eip712TypedData }> =>
       this.call(`/limit-orders/${encodeURIComponent(id)}/cancel`, { method: "POST", body: "{}" }),
     /** Test mode only: fill, half-fill or expire an open order (applied by the worker within seconds). */
     simulate: (id: string, outcome: "fill" | "partial_fill" | "expire"): Promise<LimitOrder> =>
@@ -1522,23 +1986,52 @@ export class LayerHop {
     return this.stream<OrderSummary>(`/orders/${encodeURIComponent(quoteId)}/events`, "order", opts.signal);
   }
 
-  /** Webhook developer tools with an API key (the CLI's `listen` and `trigger`). */
+  /** Webhook developer tools with an API key (the CLI's `listen`, `trigger` and `events resend`). */
   readonly webhooks = {
-    /** Your account's webhook events (the key's mode) as they are created, with the exact payloads. */
-    stream: (opts: { signal?: AbortSignal } = {}): AsyncGenerator<WebhookEventPayload> =>
-      this.stream<WebhookEventPayload>("/webhooks/stream", "event", opts.signal),
+    /**
+     * Your account's webhook events (the key's mode) as they are created, with the exact payloads,
+     * plus events resent later. `since` (ISO time, at most an hour back) first replays missed events.
+     */
+    stream: (opts: { signal?: AbortSignal; since?: string } = {}): AsyncGenerator<WebhookEventPayload> =>
+      this.stream<WebhookEventPayload>(`/webhooks/stream${opts.since ? `?${new URLSearchParams({ since: opts.since })}` : ""}`, "event", opts.signal),
     /** A sample event in test mode (test keys only): sent to your test endpoints and open streams. */
     trigger: (type: WebhookEventType): Promise<{ eventId: string; deliveries: number; payload: WebhookEventPayload }> =>
       this.call("/webhooks/trigger", { method: "POST", body: JSON.stringify({ type }) }),
+    /** Send an event of the key's mode again: to subscribed endpoints (or `endpointId`) and open streams. */
+    resend: (eventId: string, opts: { endpointId?: string } = {}): Promise<WebhookResendResult> =>
+      this.call(`/webhooks/events/${encodeURIComponent(eventId)}/resend`, { method: "POST", body: JSON.stringify(opts.endpointId ? { endpointId: opts.endpointId } : {}) }),
+  };
+
+  /** Usage and errors of the key's own account and mode (the dashboard's Usage page). */
+  readonly usage = {
+    /** Requests per hour or day with status classes, p50 / p95 latency, endpoint groups and error codes. */
+    get: (p: UsageParams = {}): Promise<UsageReport> => {
+      const q = new URLSearchParams();
+      for (const k of ["bucket", "from", "to", "keyId"] as const) if (p[k]) q.set(k, String(p[k]));
+      return this.call(`/usage${q.size ? `?${q}` : ""}`);
+    },
+    /** The newest failed requests with a stable error code (code, endpoint, time, requestId). */
+    errors: async (p: { code?: string; keyId?: string; limit?: number } = {}): Promise<UsageError[]> => {
+      const q = new URLSearchParams();
+      if (p.code) q.set("code", p.code);
+      if (p.keyId) q.set("keyId", p.keyId);
+      if (p.limit !== undefined) q.set("limit", String(p.limit));
+      return (await this.call<{ errors: UsageError[] }>(`/usage/errors${q.size ? `?${q}` : ""}`)).errors;
+    },
   };
 
   /** Read a Server-Sent Events stream, yielding the JSON data of `event` frames. */
   private async *stream<T>(path: string, event: string, signal?: AbortSignal): AsyncGenerator<T> {
+    for await (const ev of this.streamEvents(path, [event], signal)) yield ev.data as T;
+  }
+
+  /** Read a Server-Sent Events stream, yielding `{ event, data }` for frames named in `events`. */
+  private async *streamEvents(path: string, events: readonly string[], signal?: AbortSignal): AsyncGenerator<SseEvent> {
     const headers: Record<string, string> = { accept: "text/event-stream" };
     if (this.opts.apiKey) headers["x-api-key"] = this.opts.apiKey;
     const url = `${this.baseUrl}/v1${path}`;
     if (this.streamTransport() === "xhr") {
-      yield* xhrEventStream<T>(url, headers, event, signal);
+      yield* xhrEventStream(url, headers, events, signal);
       return;
     }
     const res = await this.fetchFn(url, { headers, signal });
@@ -1546,10 +2039,10 @@ export class LayerHop {
       const body = (await res.json().catch(() => ({}))) as { error?: { code: string; message: string; requestId?: string; details?: Record<string, unknown> } };
       throw new LayerHopApiError(body.error?.code ?? "INTERNAL", body.error?.message ?? res.statusText, res.status, body.error?.requestId, body.error?.details);
     }
-    const parser = new SseParser(event);
+    const parser = new SseParser(events);
     if (!res.body || typeof res.body.getReader !== "function" || typeof TextDecoder === "undefined") {
       // A fetch without streaming bodies (e.g. whatwg-fetch): the text arrives when the stream ends.
-      for (const item of parser.push(await res.text())) yield item as T;
+      for (const item of parser.push(await res.text())) yield item;
       return;
     }
     const reader = res.body.getReader();
@@ -1558,7 +2051,7 @@ export class LayerHop {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) return;
-        for (const item of parser.push(decoder.decode(value, { stream: true }))) yield item as T;
+        for (const item of parser.push(decoder.decode(value, { stream: true }))) yield item;
       }
     } finally {
       await reader.cancel().catch(() => undefined);
@@ -1603,18 +2096,20 @@ export class LayerHop {
   }
 }
 
-/** Incremental Server-Sent Events parser: feed text chunks, get the JSON data of `event` frames. */
+interface SseEvent { event: string; data: unknown }
+
+/** Incremental Server-Sent Events parser: feed text chunks, get `{ event, data }` (JSON) of the frames named in `events`. */
 class SseParser {
   private buf = "";
-  constructor(private readonly event: string) {}
+  constructor(private readonly events: readonly string[]) {}
 
-  push(chunk: string): unknown[] {
+  push(chunk: string): SseEvent[] {
     let s = this.buf + chunk;
     // A chunk may end between "\r" and "\n"; keep the "\r" until the next chunk decides.
     const hold = s.endsWith("\r") ? "\r" : "";
     if (hold) s = s.slice(0, -1);
     s = s.replace(/\r\n?/g, "\n");
-    const out: unknown[] = [];
+    const out: SseEvent[] = [];
     let i: number;
     while ((i = s.indexOf("\n\n")) >= 0) {
       const frame = s.slice(0, i);
@@ -1625,7 +2120,7 @@ class SseParser {
         if (line.startsWith("event:")) name = line.slice(6).trim();
         else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
       }
-      if (name === this.event && data.length) out.push(JSON.parse(data.join("\n")));
+      if (this.events.includes(name) && data.length) out.push({ event: name, data: JSON.parse(data.join("\n")) });
     }
     this.buf = s + hold;
     return out;
@@ -1647,10 +2142,10 @@ function apiErrorFromText(status: number, text: string, statusText: string): Lay
  * delivers `responseText` incrementally once a readystatechange/progress handler is set).
  * Network failures throw a `TypeError`, like `fetch`, so callers retry them.
  */
-async function* xhrEventStream<T>(url: string, headers: Record<string, string>, event: string, signal?: AbortSignal): AsyncGenerator<T> {
+async function* xhrEventStream(url: string, headers: Record<string, string>, events: readonly string[], signal?: AbortSignal): AsyncGenerator<SseEvent> {
   if (signal?.aborted) return;
-  const parser = new SseParser(event);
-  const queue: unknown[] = [];
+  const parser = new SseParser(events);
+  const queue: SseEvent[] = [];
   let finished = false;
   let failure: unknown = null;
   let wake: (() => void) | null = null;
@@ -1701,7 +2196,7 @@ async function* xhrEventStream<T>(url: string, headers: Record<string, string>, 
   xhr.send();
   try {
     for (;;) {
-      while (queue.length && !signal?.aborted) yield queue.shift() as T;
+      while (queue.length && !signal?.aborted) yield queue.shift()!;
       if (signal?.aborted) return;
       if (failure) throw failure;
       if (finished) return;

@@ -112,7 +112,7 @@ export interface LayerHopCheckoutProps extends MountCheckoutOptions {
  * Note: with `productId`, every mount starts a new session (React StrictMode mounts twice in dev).
  */
 export function LayerHopCheckout(props: LayerHopCheckoutProps) {
-  const { className, style, sessionId, productId, reference, metadata, baseUrl, apiUrl, title, autoResize, height, maxWidth } = props;
+  const { className, style, sessionId, productId, reference, metadata, baseUrl, apiUrl, title, theme, autoResize, height, maxWidth } = props;
   const containerRef = useRef<HTMLDivElement>(null);
   const propsRef = useRef(props);
   propsRef.current = props;
@@ -128,6 +128,7 @@ export function LayerHopCheckout(props: LayerHopCheckoutProps) {
       metadata: metadataKey ? (JSON.parse(metadataKey) as Record<string, string>) : undefined,
       baseUrl,
       apiUrl,
+      theme,
       title,
       autoResize,
       height,
@@ -137,10 +138,11 @@ export function LayerHopCheckout(props: LayerHopCheckoutProps) {
       onCancel: () => propsRef.current.onCancel?.(),
       onClose: () => propsRef.current.onClose?.(),
       onStatus: (s) => propsRef.current.onStatus?.(s),
+      onExpired: () => propsRef.current.onExpired?.(),
       onError: (e) => (propsRef.current.onError ? propsRef.current.onError(e) : console.error("[LayerHop] checkout:", e)),
     });
     return () => handle.close();
-  }, [sessionId, productId, reference, metadataKey, baseUrl, apiUrl, title, autoResize, height, maxWidth]);
+  }, [sessionId, productId, reference, metadataKey, baseUrl, apiUrl, title, theme, autoResize, height, maxWidth]);
 
   return <div ref={containerRef} className={className} style={style} data-layerhop-checkout-root="" />;
 }

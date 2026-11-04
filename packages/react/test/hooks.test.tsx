@@ -11,6 +11,7 @@ import {
   useLayerHop,
   useOrderStatus,
   useOrderStream,
+  useQuoteStream,
   useQuote,
   useSwap,
   useTokens,
@@ -278,5 +279,48 @@ describe("useOrderStream", () => {
     await waitFor(() => expect(result.current.error).toBeInstanceOf(LayerHopApiError));
     const old = renderHook(() => useOrderStream("q_1"), { wrapper: wrap(mockClient()) });
     await waitFor(() => expect(old.result.current.error?.message).toMatch(/0\.3/));
+  });
+});
+
+describe("useQuoteStream", () => {
+  const update = (seq: number, dstAmount: string) => ({ ...quoteResponse(quote({ quoteId: `q_${seq}`, dstAmount })), seq });
+
+  it("stays idle on incomplete params, follows updates, and reopens after the stream's lifetime", async () => {
+    const seen: unknown[] = [];
+    let opened = 0;
+    const client = mockClient({
+      quotes: {
+        stream: (async function* (p: unknown, o: { intervalMs?: number }) {
+          seen.push({ p, interval: o.intervalMs });
+          opened++;
+          yield update(opened * 10 + 1, "100");
+          yield update(opened * 10 + 2, "99");
+          if (opened >= 2) await new Promise(() => undefined); // second window stays open
+        }) as never,
+      },
+    });
+    const idle = renderHook(() => useQuoteStream({ ...params, amount: "" }), { wrapper: wrap(client) });
+    expect(idle.result.current).toEqual({ data: null, error: null, connected: false });
+    const { result, unmount } = renderHook(() => useQuoteStream(params, { intervalMs: 5000 }), { wrapper: wrap(client) });
+    await waitFor(() => expect(result.current.data?.seq).toBe(22));
+    expect(result.current).toMatchObject({ error: null, connected: true, data: { best: { dstAmount: "99" } } });
+    expect(seen[0]).toEqual({ p: params, interval: 5000 });
+    expect(opened).toBe(2);
+    unmount();
+  });
+
+  it("stops on client errors and explains a missing quotes.stream", async () => {
+    const blocked = mockClient({
+      quotes: {
+        stream: (async function* () {
+          throw new LayerHopApiError("ADDRESS_SANCTIONED", "listed", 451);
+        }) as never,
+      },
+    });
+    const { result } = renderHook(() => useQuoteStream(params), { wrapper: wrap(blocked) });
+    await waitFor(() => expect(result.current.error).toBeInstanceOf(LayerHopApiError));
+    expect(result.current.connected).toBe(false);
+    const old = renderHook(() => useQuoteStream(params), { wrapper: wrap(mockClient()) });
+    await waitFor(() => expect(old.result.current.error?.message).toMatch(/quotes\.stream/));
   });
 });

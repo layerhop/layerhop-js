@@ -21,7 +21,7 @@ import {
   type TokenRisk,
 } from "@layerhop/sdk";
 import {
-  CHAINS, TOKENS, type BuiltTx, type Chain, type GaslessSignRequest, type OrderStatus, type PricesResponse, type ProviderId, type SvmTx, type Token, type TokenInfo, type TokensResponse,
+  CHAINS, TOKENS, type BuiltTx, type Chain, type Eip712TypedData, type GaslessSignRequest, type OrderStatus, type PricesResponse, type ProviderId, type SvmTx, type Token, type TokenInfo, type TokensResponse,
 } from "@layerhop/shared";
 
 export interface ClientOptions {
@@ -300,12 +300,13 @@ export class LayerHopClient {
   }
 
   /** Relays a transaction the maker's own wallet already signed. */
-  submitLimitOrder(id: string, signedTransaction: string): Promise<{ limitOrder: LimitOrder; txHash: string }> {
-    return this.viaSdk(() => this.sdk.limitOrders.submit(id, signedTransaction), "POST /v1/limit-orders/{id}/submit");
+  /** `signed`: a signed Solana tx (base64) or `{ signature }` for an EVM (CoW) order or cancellation. */
+  submitLimitOrder(id: string, signed: string | { signature: string }): Promise<{ limitOrder: LimitOrder; txHash: string | null }> {
+    return this.viaSdk(() => this.sdk.limitOrders.submit(id, signed), "POST /v1/limit-orders/{id}/submit");
   }
 
   /** The UNSIGNED cancel transaction (`tx: null` when the order was never submitted and is cancelled at once). */
-  cancelLimitOrder(id: string): Promise<{ limitOrder: LimitOrder; tx: SvmTx | null }> {
+  cancelLimitOrder(id: string): Promise<{ limitOrder: LimitOrder; tx: SvmTx | null; typedData?: Eip712TypedData }> {
     return this.viaSdk(() => this.sdk.limitOrders.cancel(id), "POST /v1/limit-orders/{id}/cancel");
   }
 

@@ -1,5 +1,6 @@
 import { encodeFunctionData, erc20Abi, type Address, type Hex } from "viem";
 import type { EvmTx } from "@layerhop/sdk";
+import { speedFees, speedSupported, type FeeSnapshot, type GasSpeed, type TxFees } from "./speed.js";
 
 /** One call of a LayerHop EVM transaction, ready for the wallet (`value` in wei). */
 export interface WalletCall {
@@ -38,7 +39,10 @@ export interface EvmDriver {
   sendCalls(p: { chainId: number; account: Address; calls: WalletCall[] }): Promise<string>;
   /** Waits for `wallet_getCallsStatus` to settle. */
   waitForCalls(p: { chainId: number; id: string }): Promise<{ status?: string; receipts?: readonly { transactionHash: Hex; status?: string }[] }>;
-  sendTransaction(p: { chainId: number; account: Address; call: WalletCall }): Promise<Hex>;
+  /** `fees`: fee fields to suggest to the wallet (a `speed`); without them the wallet picks its own. */
+  sendTransaction(p: { chainId: number; account: Address; call: WalletCall; fees?: TxFees }): Promise<Hex>;
+  /** Current fee data for `chainId` (read-only RPC). Needed for `speed`; without it the wallet picks the fees. */
+  readFees?(p: { chainId: number }): Promise<FeeSnapshot>;
   /** Resolves true when the transaction succeeded, false when it reverted. */
   waitForReceipt(p: { chainId: number; hash: Hex }): Promise<boolean>;
 }
@@ -57,6 +61,13 @@ export interface SendEvmTxOptions {
   onBatchFallback?: (error: unknown) => void;
   /** A sequential extra call (e.g. the checkout fee transfer) was not sent. Default: console.warn. */
   onExtraTxError?: (error: unknown, index: number) => void;
+  /**
+   * Transaction speed (`speed.ts`). Default `normal`: the wallet picks the fees. `fast` / `instant`
+   * suggest a higher priority fee from recent blocks; batches can't carry fee fields, so the calls
+   * then go one by one (unless `batch` is set explicitly). No effect on chains that ignore the
+   * priority fee (`NO_PRIORITY_FEE_CHAINS`) or when the driver can't read fees.
+   */
+  speed?: GasSpeed;
 }
 
 export interface SentEvmTx {
@@ -70,6 +81,8 @@ export interface SentEvmTx {
   approvalHash?: Hex;
   /** Extra call transactions that were sent (sequential mode). */
   extraTxHashes: Hex[];
+  /** Fee fields suggested with the main call (a `speed`); undefined = the wallet picked them. */
+  fees?: TxFees;
   /** Resolves true once the main call is confirmed on chain, false when it reverted. */
   wait: () => Promise<boolean>;
 }
@@ -241,7 +254,7 @@ export async function sendEvmTx(driver: EvmDriver, tx: EvmTx, opts: SendEvmTxOpt
     needsApproval = allowance < BigInt(tx.approval.amount);
   }
   const calls = evmCalls(tx, needsApproval);
-  const batch = opts.batch ?? "auto";
+  const batch = opts.batch ?? (speedActive(driver, chainId, opts.speed) ? "never" : "auto");
 
   if (batch !== "never" && calls.length > 1) {
     if (await detectAtomicBatch(driver, chainId, address)) {
@@ -268,6 +281,21 @@ export async function sendEvmTx(driver: EvmDriver, tx: EvmTx, opts: SendEvmTxOpt
     }
   }
   return sendSequential(driver, chainId, address, calls, needsApproval, opts);
+}
+
+/** A speed other than `normal` applies on this chain with this driver. */
+export function speedActive(driver: Pick<EvmDriver, "readFees">, chainId: number, speed: GasSpeed | undefined): boolean {
+  return !!speed && speed !== "normal" && typeof driver.readFees === "function" && speedSupported(chainId);
+}
+
+/** Fee fields for the next transaction at `speed` (fresh fee data each time); undefined = the wallet decides. */
+async function feesFor(driver: EvmDriver, chainId: number, speed: GasSpeed | undefined): Promise<TxFees | undefined> {
+  if (!speedActive(driver, chainId, speed)) return undefined;
+  try {
+    return speedFees(await driver.readFees!({ chainId }), speed!);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Sequential send after a failed batch: the allowance is read again, so an approval that did land isn't repeated. */
@@ -434,23 +462,27 @@ async function sendSequential(
   if (needsApproval) {
     opts.onApproval?.({ batched: false });
     opts.onStep?.("approving");
-    approvalHash = await driver.sendTransaction({ chainId, account, call: calls[i++]! });
+    approvalHash = await driver.sendTransaction({ chainId, account, call: calls[i++]!, ...withFees(await feesFor(driver, chainId, opts.speed)) });
     if (!(await driver.waitForReceipt({ chainId, hash: approvalHash }))) {
       throw new LayerHopWalletError("APPROVAL_FAILED", "Token approval failed on-chain.");
     }
   }
   opts.onStep?.("signing");
-  const hash = await driver.sendTransaction({ chainId, account, call: calls[i++]! });
+  const fees = await feesFor(driver, chainId, opts.speed);
+  const hash = await driver.sendTransaction({ chainId, account, call: calls[i++]!, ...withFees(fees) });
   // Extra calls go after the main transaction. It has already been sent, so a rejected or failed
   // extra call never fails the send.
   const extraTxHashes: Hex[] = [];
   for (let n = 0; i < calls.length; i++, n++) {
     try {
-      extraTxHashes.push(await driver.sendTransaction({ chainId, account, call: calls[i]! }));
+      extraTxHashes.push(await driver.sendTransaction({ chainId, account, call: calls[i]!, ...withFees(fees) }));
     } catch (e) {
       if (opts.onExtraTxError) opts.onExtraTxError(e, n);
       else console.warn("LayerHop: extra transaction not sent", e);
     }
   }
-  return { hash, chainId, mode: "sequential", approvalHash, extraTxHashes, wait: () => driver.waitForReceipt({ chainId, hash }) };
+  return { hash, chainId, mode: "sequential", approvalHash, extraTxHashes, ...withFees(fees), wait: () => driver.waitForReceipt({ chainId, hash }) };
 }
+
+/** `{ fees }` when there are fee fields, else nothing (drivers and results keep their old shape). */
+const withFees = (fees: TxFees | undefined): { fees?: TxFees } => (fees ? { fees } : {});

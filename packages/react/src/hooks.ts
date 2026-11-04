@@ -6,6 +6,7 @@ import {
   type QuoteParams,
   type QuoteResponse,
   type OrderSummary,
+  type QuoteStreamUpdate,
 } from "@layerhop/sdk";
 import { useMutation, useQuery, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -172,5 +173,77 @@ export function useOrderStream(quoteId: string | null | undefined): OrderStreamS
     })();
     return () => ctrl.abort();
   }, [client, quoteId]);
+  return state;
+}
+
+export interface UseQuoteStreamOptions {
+  /** Extra gate on top of "params are complete". Default true. */
+  enabled?: boolean;
+  /** Refresh interval in ms (server default 10000, minimum 5000). Each refresh counts against your rate limit. */
+  intervalMs?: number;
+  /**
+   * Open a new stream when one ends after its 5-minute lifetime (default true). Set false to stop
+   * after one window, e.g. when the user is idle.
+   */
+  reconnect?: boolean;
+}
+
+export interface QuoteStreamState {
+  /** The latest quote set (null until the first event). Keeps the last one after an error. */
+  data: QuoteStreamUpdate | null;
+  /** The last error. Client errors (bad params, `NO_ROUTE`, `ADDRESS_SANCTIONED`) stop the stream; others reconnect with backoff. */
+  error: Error | null;
+  /** True while a stream is open. */
+  connected: boolean;
+}
+
+/**
+ * Live quotes over Server-Sent Events (`GET /v1/quote/stream`, D-068): the ranked quote set now,
+ * then again whenever the best route or an amount changes (and before the shown quote expires).
+ * Idle while params are incomplete. Reconnects after network errors and 429s (1 s, 2 s, 4 s … 30 s).
+ * Needs `@layerhop/sdk` with `quotes.stream` (0.9+); otherwise `error` explains it.
+ */
+export function useQuoteStream(params: Partial<QuoteParams> | null | undefined, opts: UseQuoteStreamOptions = {}): QuoteStreamState {
+  const client = useLayerHop();
+  const { enabled = true, intervalMs, reconnect = true } = opts;
+  const ready = enabled && isComplete(params);
+  const key = ready ? JSON.stringify(params) : "";
+  const [state, setState] = useState<QuoteStreamState>({ data: null, error: null, connected: false });
+  useEffect(() => {
+    if (!key) {
+      setState((s) => (s.connected ? { ...s, connected: false } : s));
+      return;
+    }
+    const stream = client.quotes?.stream;
+    if (typeof stream !== "function") {
+      setState((s) => ({ ...s, error: new Error("useQuoteStream needs @layerhop/sdk 0.9+ (client.quotes.stream)") }));
+      return;
+    }
+    const p = JSON.parse(key) as QuoteParams;
+    const ctrl = new AbortController();
+    let attempt = 0;
+    setState({ data: null, error: null, connected: false });
+    void (async () => {
+      while (!ctrl.signal.aborted) {
+        try {
+          setState((s) => ({ ...s, connected: true }));
+          for await (const data of stream(p, { signal: ctrl.signal, ...(intervalMs !== undefined ? { intervalMs } : {}) })) {
+            attempt = 0;
+            setState({ data, error: null, connected: true });
+          }
+          // The stream reached its lifetime.
+          if (!reconnect || ctrl.signal.aborted) break;
+          continue;
+        } catch (e) {
+          if (ctrl.signal.aborted) break;
+          setState((s) => ({ ...s, error: e as Error, connected: false }));
+          if (e instanceof LayerHopApiError && e.status < 500 && e.status !== 429) break;
+        }
+        await new Promise((r) => setTimeout(r, Math.min(30_000, 1000 * 2 ** attempt++)));
+      }
+      setState((s) => ({ ...s, connected: false }));
+    })();
+    return () => ctrl.abort();
+  }, [client, key, intervalMs, reconnect]);
   return state;
 }

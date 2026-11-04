@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -73,7 +73,7 @@ describe("parse", () => {
     expect(t.text()).toMatch(/Usage: layerhop/);
     const v = io();
     expect(await run(["-v"], v.io)).toBe(0);
-    expect(v.text()).toBe("0.8.0");
+    expect(v.text()).toBe("0.9.0");
     expect(await run([], io().io)).toBe(1);
     expect(await run(["bogus"], io().io)).toBe(2);
   });
@@ -334,6 +334,94 @@ describe("listen + trigger", () => {
     expect(t.text()).toMatch(/Triggered checkout\.session\.completed \[evt_9\]: queued for 2 test endpoints/);
     expect(await run(["trigger", "order.filled"], io(undefined, { env: { LAYERHOP_API_KEY: `lh_live_${"b".repeat(32)}` } }).io)).toBe(2);
     expect(await run(["trigger", "nope"], io(undefined, { env: { LAYERHOP_API_KEY: TEST_KEY } }).io)).toBe(2);
+  });
+
+  it("listen reconnects with ?since so events from the gap are replayed", async () => {
+    const urls: string[] = [];
+    let calls = 0;
+    const fetch = vi.fn(async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes("/v1/webhooks/stream")) {
+        urls.push(u);
+        const frames = calls++ === 0 ? `event: event\ndata: ${JSON.stringify(ev)}\n\n` : `event: event\ndata: ${JSON.stringify({ ...ev, id: "evt_2", createdAt: "2026-10-18T10:05:00.000Z" })}\n\n`;
+        return new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(frames)); c.close(); } }));
+      }
+      return new Response("ok", { status: 200 });
+    }) as unknown as typeof globalThis.fetch;
+    const t = io(undefined, { fetch, env: { LAYERHOP_API_KEY: TEST_KEY } });
+    expect(await run(["listen", "--forward-to", "http://localhost:3000/hooks", "--max-events", "2"], t.io)).toBe(0);
+    expect(urls[0]).toMatch(/\/v1\/webhooks\/stream$/);
+    expect(new URL(urls[1]!).searchParams.get("since")).toBe(ev.createdAt);
+  });
+
+  it("events resend posts the id (and --endpoint)", async () => {
+    const t = io((url, init) => {
+      expect(url).toMatch(/\/v1\/webhooks\/events\/evt_7\/resend$/);
+      expect(JSON.parse(String(init?.body))).toEqual({ endpointId: "whe_1" });
+      return [202, { eventId: "evt_7", type: "order.filled", livemode: false, deliveries: [{ id: "whd_1", endpointId: "whe_1" }] }];
+    }, { env: { LAYERHOP_API_KEY: TEST_KEY } });
+    expect(await run(["events", "resend", "evt_7", "--endpoint", "whe_1"], t.io)).toBe(0);
+    expect(t.text()).toMatch(/Resent order\.filled \[evt_7\]: queued for 1 endpoint and any running `layerhop listen`/);
+    expect(await run(["events", "resend"], io(undefined, { env: { LAYERHOP_API_KEY: TEST_KEY } }).io)).toBe(2);
+    expect(await run(["events", "resend", "evt_7"], io().io)).toBe(2); // no key
+  });
+});
+
+describe("login / logout / usage", () => {
+  const TEST_KEY = `lh_test_${"a".repeat(32)}`;
+  const usage = {
+    bucket: "day", from: "2026-10-05T00:00:00.000Z", to: "2026-11-04T00:00:00.000Z", livemode: false, keyId: null,
+    totals: { requests: 10, errors: 2, byStatusClass: { "2xx": 8, "3xx": 0, "4xx": 2, "5xx": 0 }, avgMs: 120, p50Ms: 80, p95Ms: 1400 },
+    series: [], byEndpoint: [{ group: "quote", requests: 10, errors: 2, byStatusClass: { "2xx": 8, "3xx": 0, "4xx": 2, "5xx": 0 }, avgMs: 120, p50Ms: 80, p95Ms: 1400 }],
+    errorCodes: [{ code: "NO_ROUTE", count: 2, byEndpoint: { quote: 2 } }],
+  };
+  const configDir = () => {
+    const d = mkdtempSync(join(tmpdir(), "layerhop-cfg-"));
+    tmp.push(d);
+    return join(d, "layerhop");
+  };
+
+  it("checks the key, saves it with mode 600, uses it for later commands, and logout removes it", async () => {
+    const dir = configDir();
+    const keys: (string | undefined)[] = [];
+    const handler = (url: string, init?: RequestInit): [number, unknown] => {
+      keys.push((init?.headers as Record<string, string> | undefined)?.["x-api-key"]);
+      if (url.includes("/v1/usage/errors")) return [200, { livemode: false, errors: [{ ts: "2026-11-04T09:00:00.000Z", keyId: null, requestId: "req-1", method: "GET", path: "/v1/quote", endpointGroup: "quote", status: 404, code: "NO_ROUTE", latencyMs: 20 }] }];
+      if (url.includes("/v1/usage")) return [200, usage];
+      return [500, {}];
+    };
+    const login = io(handler, { env: { LAYERHOP_CONFIG_DIR: dir } });
+    expect(await run(["login", "--api-key", TEST_KEY], login.io)).toBe(0);
+    expect(login.text()).toMatch(/Logged in with lh_test_aaaa…aaaa \(test mode\)/);
+    expect(login.text()).not.toContain(TEST_KEY);
+    const file = join(dir, "config.json");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ apiKey: TEST_KEY });
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+
+    // A later command without --api-key / env uses the saved key.
+    const u = io(handler, { env: { LAYERHOP_CONFIG_DIR: dir } });
+    expect(await run(["usage"], u.io)).toBe(0);
+    expect(keys.at(-1)).toBe(TEST_KEY);
+    expect(u.text()).toMatch(/Requests 10\s+errors 2 \(20\.00%\)/);
+    expect(u.text()).toMatch(/quote\s+10\s+2\s+80 ms\s+1\.40 s/);
+    expect(u.text()).toMatch(/NO_ROUTE\s+404\s+GET \/v1\/quote\s+req-1/);
+
+    const out = io(undefined, { env: { LAYERHOP_CONFIG_DIR: dir } });
+    expect(await run(["logout"], out.io)).toBe(0);
+    expect(existsSync(file)).toBe(false);
+    expect(await run(["usage"], io(handler, { env: { LAYERHOP_CONFIG_DIR: dir } }).io)).toBe(2); // no key any more
+  });
+
+  it("reads the key from the terminal; refuses malformed and rejected keys", async () => {
+    const dir = configDir();
+    const prompted = io(() => [200, usage], { env: { LAYERHOP_CONFIG_DIR: dir }, readLine: async () => `  ${TEST_KEY}\n` });
+    expect(await run(["login"], prompted.io)).toBe(0);
+    expect(existsSync(join(dir, "config.json"))).toBe(true);
+    expect(await run(["login"], io(undefined, { env: { LAYERHOP_CONFIG_DIR: configDir() } }).io)).toBe(2); // not interactive
+    expect(await run(["login", "--api-key", "sk_nope"], io(undefined, { env: { LAYERHOP_CONFIG_DIR: configDir() } }).io)).toBe(2);
+    const rejected = configDir();
+    expect(await run(["login", "--api-key", TEST_KEY], io(() => [401, { error: { code: "UNAUTHORIZED", message: "Invalid or revoked API key" } }], { env: { LAYERHOP_CONFIG_DIR: rejected } }).io)).toBe(1);
+    expect(existsSync(join(rejected, "config.json"))).toBe(false);
   });
 });
 

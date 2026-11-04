@@ -4,7 +4,7 @@ import type { Chain, ProviderId } from "@layerhop/shared";
 import { z } from "zod";
 import { assertAddress, isTxHash, isValidAddress, vmOfAddress } from "./address.js";
 import { AmountError, fromBaseUnits, toBaseUnits } from "./amounts.js";
-import { LayerHopApiError } from "@layerhop/sdk";
+import { LayerHopApiError, cowCancellationProblems, cowOrderProblems } from "@layerhop/sdk";
 import { EndpointUnavailableError, LayerHopClient } from "./client.js";
 import { configFromEnv, VERSION, type McpConfig } from "./config.js";
 import {
@@ -36,7 +36,7 @@ Safe workflow: list_chains / list_tokens if unsure -> get_quote -> show the user
 
 Before a user buys or receives a token that is unverified or unfamiliar, call get_token_risk and show any caution or danger reasons. When get_quote fails with NO_ROUTE, the error may list alternatives that do quote (another destination or source token, or two steps through a hub): offer them, never switch silently. Gasless quotes (typed data) and Tron transactions can't be signed or completed through this server: give the user the swap link.
 
-Solana limit orders (create_limit_order and friends) return UNSIGNED transactions: only the maker's own wallet signs them; submit_limit_order only relays an already-signed transaction.
+Limit orders (create_limit_order and friends) return UNSIGNED transactions (Solana) or EIP-712 typed data to sign (EVM, CoW Protocol): only the maker's own wallet signs them; submit_limit_order only relays an already-made signature.
 
 Deposit addresses (create_deposit_address and friends, API key required) let a user swap or bridge by just sending a token to an address. When you show one, always tell the user: send ONLY that token on that chain (anything else may be lost), at least $1 worth, and refunds go to refundTo, which must be their own address, never an exchange deposit address. Test-key addresses are fake: never send real funds; use simulate_deposit.`;
 
@@ -552,7 +552,7 @@ export function buildServer(opts: InternalServerOptions): McpServer {
       }),
   );
 
-  // ---------- Solana limit orders ----------
+  // ---------- limit orders (Solana: Jupiter Trigger; EVM: CoW Protocol, D-061) ----------
   const limitIdSchema = z.string().regex(/^lo_/, "limit order ids start with lo_").describe('Limit order id (starts with "lo_").');
   const limitSigning = (id: string, what: string) => ({
     notice: `This is an UNSIGNED Solana transaction (${what}). ${NO_KEYS} Only the maker's own wallet may sign it, after the user confirmed.`,
@@ -562,15 +562,23 @@ export function buildServer(opts: InternalServerOptions): McpServer {
     ],
   });
   const limitLookup = (chainIds: number[]) => core.tokenLookup(chainIds);
+  const evmLimitSigning = (id: string, what: string, extra: string[] = []) => ({
+    notice: `This is EIP-712 typed data (${what}), not a transaction: signing it costs no gas. ${NO_KEYS} Only the maker's own wallet may sign it, after the user confirmed.`,
+    steps: [
+      ...extra,
+      "Sign typedData exactly as given with the maker's wallet (eth_signTypedData_v4). Do not change it.",
+      `Then call submit_limit_order with id "${id}" and signature (the 65-byte 0x signature).`,
+    ],
+  });
 
   server.registerTool(
     "list_limit_orders",
     {
-      title: "List Solana limit orders",
+      title: "List limit orders",
       description:
-        "List Solana limit orders (Jupiter Trigger) of a wallet, or of the API key's account without a wallet: what is sold, the minimum received, status (built, open, filled, cancelled, expired, failed) and fills. Read-only.",
+        "List limit orders (Solana: Jupiter Trigger; EVM: CoW Protocol) of a wallet, or of the API key's account without a wallet: what is sold, the minimum received, status (built, open, filled, cancelled, expired, failed) and fills. Read-only.",
       inputSchema: {
-        wallet: z.string().min(1).optional().describe("Solana wallet (base58) whose limit orders to list. Without it: the API key's account (needs a key)."),
+        wallet: z.string().min(1).optional().describe("Wallet (Solana base58 or EVM 0x) whose limit orders to list. Without it: the API key's account (needs a key)."),
         status: z.enum(["built", "open", "filled", "cancelled", "expired", "failed"]).optional().describe("Only orders with this status."),
         limit: z.number().int().min(1).max(100).optional().describe("Max orders to return."),
         cursor: z.string().optional().describe("nextCursor from a previous call, for the next page."),
@@ -589,8 +597,8 @@ export function buildServer(opts: InternalServerOptions): McpServer {
   server.registerTool(
     "get_limit_order",
     {
-      title: "Get a Solana limit order",
-      description: "Get one Solana limit order with its fills (each fill is an order whose quoteId starts with lof_). Read-only.",
+      title: "Get a limit order",
+      description: "Get one limit order with its fills (each fill is an order whose quoteId starts with lof_). Read-only.",
       inputSchema: { id: limitIdSchema },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -604,36 +612,61 @@ export function buildServer(opts: InternalServerOptions): McpServer {
   server.registerTool(
     "create_limit_order",
     {
-      title: "Create a Solana limit order (unsigned)",
-      description: `Build a Solana limit order (Jupiter Trigger): sell sellAmount of sellToken once the market gives at least minReceive of buyToken. Returns the order and its UNSIGNED transaction for the maker's own wallet to sign; then call submit_limit_order. Worth at least $5. LayerHop's fee applies when buyToken is SOL, USDC or USDT. ${NO_KEYS} Confirm the price with the user first.`,
+      title: "Create a limit order (unsigned)",
+      description: `Build a limit order: sell sellAmount of sellToken once the market gives at least minReceive of buyToken. Solana (default, Jupiter Trigger): returns an UNSIGNED transaction; LayerHop's fee applies when buyToken is SOL, USDC or USDT. EVM chains with CoW Protocol (Ethereum, Arbitrum, Base, BNB Chain, Polygon, Avalanche, Gnosis, Linea, Plasma, Ink): returns EIP-712 typed data plus the token approval it needs; sellToken must be an ERC-20. Then the maker's own wallet signs and you call submit_limit_order. Worth at least $5. ${NO_KEYS} Confirm the price with the user first.`,
       inputSchema: {
-        wallet: z.string().min(1).describe("The maker's Solana wallet (base58): signs the order and receives buyToken."),
-        sellToken: tokenSchema("Token to sell (Solana)"),
+        chain: chainSchema("Chain of the order (default solana)").optional(),
+        wallet: z.string().min(1).describe("The maker's wallet (Solana base58 or EVM 0x): signs the order and receives buyToken."),
+        sellToken: tokenSchema("Token to sell"),
         sellAmount: amountSchema.describe('HUMAN units of sellToken to sell, e.g. "50" for 50 USDC.'),
-        buyToken: tokenSchema("Token to buy (Solana)"),
+        buyToken: tokenSchema("Token to buy"),
         minReceive: amountSchema.describe('Minimum HUMAN units of buyToken for the whole sellAmount (the limit price is minReceive / sellAmount), e.g. "0.5" for 0.5 SOL.'),
-        expiresInMinutes: z.number().int().min(1).max(525600).optional().describe("Cancel automatically after this many minutes. Omit for good-till-cancelled."),
+        expiresInMinutes: z.number().int().min(1).max(525600).optional().describe("Cancel automatically after this many minutes. Solana: omit for good-till-cancelled. EVM: default 90 days."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     (a) =>
       run(async () => {
-        const sol = await resolveChain("solana");
+        const chain = await resolveChain(a.chain ?? "solana");
         const wallet = a.wallet.trim();
-        assertAddress(sol.vm, wallet, "wallet", sol.name);
-        const [src, dst] = await Promise.all([core.resolveTokenOnline(sol, a.sellToken), core.resolveTokenOnline(sol, a.buyToken)]);
+        assertAddress(chain.vm, wallet, "wallet", chain.name);
+        const [src, dst] = await Promise.all([core.resolveTokenOnline(chain, a.sellToken), core.resolveTokenOnline(chain, a.buyToken)]);
+        const amount = toBaseUnits(a.sellAmount, src.decimals);
+        const dstAmount = toBaseUnits(a.minReceive, dst.decimals);
         const created = await client.createLimitOrder({
+          ...(chain.vm === "svm" ? {} : { chain: chain.id }),
           wallet,
           srcToken: src.address,
           dstToken: dst.address,
-          amount: toBaseUnits(a.sellAmount, src.decimals),
-          dstAmount: toBaseUnits(a.minReceive, dst.decimals),
+          amount,
+          dstAmount,
           ...(a.expiresInMinutes ? { expiresAt: Math.floor(Date.now() / 1000) + a.expiresInMinutes * 60 } : {}),
         });
         const lookup = await limitLookup([created.chainId]);
-        const { tx, ...order } = created;
+        const { tx, typedData, appData, approval, sandbox, ...order } = created;
+        const view = formatLimitOrder(order, (c, addr) => lookup(c, addr) ?? (addr === src.address ? src : addr === dst.address ? dst : undefined));
+        if (!tx) {
+          // EVM (CoW): re-check the typed data against what was asked before handing it to a wallet.
+          const fees = created.fees.ourFeeBps + created.fees.integratorFeeBps;
+          const recipient = /"recipient":"(0x[0-9a-f]{40})"/.exec(appData ?? "")?.[1];
+          const problems = cowOrderProblems(typedData, appData, {
+            chainId: chain.id, owner: wallet, sellToken: src.address, buyToken: dst.address, sellAmount: amount, buyAmount: dstAmount,
+            feeBps: fees, feeRecipient: recipient, orderUid: created.providerOrderId,
+          });
+          if (problems.length) throw new UserInputError(`Refusing this order: its typed data failed the safety checks (${problems.join("; ")}). Do not sign it.`);
+          return {
+            limitOrder: view,
+            typedData,
+            appData,
+            approval,
+            signing: evmLimitSigning(created.id, "places the limit order", [
+              `Make sure the wallet's ${src.symbol} allowance for ${approval?.spender} (CoW Protocol's vault relayer) is at least ${approval?.amount} base units plus its other open orders of this token; if not, send approve(spender, amount) for that exact total first.`,
+            ]),
+            ...(sandbox ? { warning: "TEST MODE: the order is never sent to CoW Protocol." } : {}),
+          };
+        }
         return {
-          limitOrder: formatLimitOrder(order, (c, addr) => lookup(c, addr) ?? (addr === src.address ? src : addr === dst.address ? dst : undefined)),
+          limitOrder: view,
           unsignedTransaction: { vm: "svm", serializedTx: tx.serializedTx, encoding: "base64", submitViaApi: true, ...(tx.sandbox ? { sandbox: true } : {}) },
           signing: limitSigning(created.id, "opens the limit order"),
           ...(tx.sandbox ? { warning: "TEST MODE: placeholder transaction that can never land. Never broadcast it." } : {}),
@@ -644,17 +677,19 @@ export function buildServer(opts: InternalServerOptions): McpServer {
   server.registerTool(
     "submit_limit_order",
     {
-      title: "Submit a signed limit-order transaction",
-      description: `Send a Solana limit order's create or cancel transaction AFTER the maker's own wallet signed it (from create_limit_order or cancel_limit_order). This only relays the already-signed transaction; ${NO_KEYS}`,
+      title: "Submit a signed limit order or cancellation",
+      description: `Send a limit order's create or cancel step AFTER the maker's own wallet signed it (from create_limit_order or cancel_limit_order): the signed Solana transaction, or the EIP-712 signature of an EVM order. This only relays what the wallet signed; ${NO_KEYS}`,
       inputSchema: {
         id: limitIdSchema,
-        signedTransaction: z.string().min(1).describe("The wallet-signed transaction, base64."),
+        signedTransaction: z.string().min(1).optional().describe("Solana: the wallet-signed transaction, base64."),
+        signature: z.string().regex(/^0x[0-9a-fA-F]{130}$/, "a 65-byte 0x signature").optional().describe("EVM: the wallet's eth_signTypedData_v4 signature of typedData."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     (a) =>
       run(async () => {
-        const r = await client.submitLimitOrder(a.id, a.signedTransaction.trim());
+        if (!a.signedTransaction === !a.signature) throw new UserInputError("Pass exactly one of signedTransaction (Solana) or signature (EVM).");
+        const r = await client.submitLimitOrder(a.id, a.signature ? { signature: a.signature } : a.signedTransaction!.trim());
         const lookup = await limitLookup([r.limitOrder.chainId]);
         return { txHash: r.txHash, limitOrder: formatLimitOrder(r.limitOrder, lookup), next: `Check it with get_limit_order { id: "${a.id}" }.` };
       }),
@@ -663,8 +698,8 @@ export function buildServer(opts: InternalServerOptions): McpServer {
   server.registerTool(
     "cancel_limit_order",
     {
-      title: "Cancel a Solana limit order (unsigned)",
-      description: `Cancel an open Solana limit order: returns the UNSIGNED cancel transaction for the maker's wallet to sign, then submit_limit_order. An order that was never submitted is cancelled at once (no transaction). Confirm with the user first. ${NO_KEYS}`,
+      title: "Cancel a limit order (unsigned)",
+      description: `Cancel an open limit order: returns the UNSIGNED cancel transaction (Solana) or the cancellation typed data (EVM, no gas) for the maker's wallet to sign, then submit_limit_order. An order that was never submitted is cancelled at once (nothing to sign). Confirm with the user first. ${NO_KEYS}`,
       inputSchema: { id: limitIdSchema },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
@@ -672,6 +707,11 @@ export function buildServer(opts: InternalServerOptions): McpServer {
       run(async () => {
         const r = await client.cancelLimitOrder(id);
         const lookup = await limitLookup([r.limitOrder.chainId]);
+        if (r.typedData) {
+          const problems = cowCancellationProblems(r.typedData, r.limitOrder.chainId, r.limitOrder.providerOrderId);
+          if (problems.length) throw new UserInputError(`Refusing this cancellation: ${problems.join("; ")}. Do not sign it.`);
+          return { limitOrder: formatLimitOrder(r.limitOrder, lookup), typedData: r.typedData, signing: evmLimitSigning(id, "cancels the limit order off chain") };
+        }
         if (!r.tx) return { limitOrder: formatLimitOrder(r.limitOrder, lookup), summary: "The order was never submitted, so it is cancelled now. Nothing to sign." };
         return {
           limitOrder: formatLimitOrder(r.limitOrder, lookup),

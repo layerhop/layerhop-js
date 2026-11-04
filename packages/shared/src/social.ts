@@ -423,6 +423,41 @@ export function buildShareTradesMessage(f: ShareTradesFields): string {
   ].join("\n");
 }
 
+// ---- launch curation (featured / hidden launches) ------------------------------------------------
+
+export const LAUNCH_CURATION_ACTIONS = ["feature", "unfeature", "hide", "unhide"] as const;
+export type LaunchCurationAction = (typeof LAUNCH_CURATION_ACTIONS)[number];
+export const LAUNCH_CURATION_SIGNATURE_TTL_MS = 10 * 60_000;
+
+export interface LaunchCurationFields {
+  vm: WalletVm;
+  /** A launch admin wallet (EVM lowercase 0x…, Solana base58). */
+  wallet: string;
+  /** The launched token (Solana mint or EVM token address, as stored: EVM lowercase). */
+  token: string;
+  action: LaunchCurationAction;
+  /** ISO 8601 (Date.toISOString()). */
+  issuedAt: string;
+}
+
+/**
+ * The exact text a launch admin wallet signs on app.layerhop.com/create/admin to feature (pin) or hide a
+ * LayerHop launch. Plain text like the trade feed opt-in; the API rebuilds it from the submitted fields.
+ * Featuring is promotion only: it says nothing about a token's safety.
+ */
+export function buildLaunchCurationMessage(f: LaunchCurationFields): string {
+  return [
+    "LayerHop launch admin",
+    "",
+    "Change how a LayerHop launch is shown in the app. Signing is free and does not move funds.",
+    "",
+    `Wallet: ${f.wallet}`,
+    `Token: ${f.token}`,
+    `Action: ${f.action}`,
+    `Issued At: ${f.issuedAt}`,
+  ].join("\n");
+}
+
 // ---- ecosystem ("Built on LayerHop") -------------------------------------------------------------
 
 export const ECOSYSTEM_CATEGORIES = ["wallet", "dapp", "bot", "agent", "payments", "tooling", "analytics", "other"] as const;

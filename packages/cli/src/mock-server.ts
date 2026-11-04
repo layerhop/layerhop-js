@@ -10,7 +10,9 @@
  * anything else fills `fillAfterMs` after it is reported. Built transactions are placeholders that move
  * no funds (`tx.sandbox: true`, EVM `to` = 0x…dEaD, Solana: an unsignable memo with a zero blockhash).
  * Never broadcast them. When `webhookUrl` is set, order events are POSTed there, signed exactly like
- * real deliveries (LayerHop-Signature, HMAC-SHA256 with `webhookSecret`).
+ * real deliveries (LayerHop-Signature, HMAC-SHA256 with `webhookSecret`). Every event is also sent to
+ * `GET /v1/webhooks/stream` (Server-Sent Events), so `layerhop listen` works against the mock, and
+ * `POST /v1/webhooks/events/{id}/resend` sends one of the last 200 events again.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -197,6 +199,10 @@ export async function startMockServer(opts: MockServerOptions = {}): Promise<Moc
   const deliveries = new Set<Promise<void>>();
   let seq = 0;
   let eventSeq = 0;
+  type MockEvent = { id: string; type: string; livemode: false; sample?: true; createdAt: string; data: Record<string, unknown> };
+  /** The last 200 events (for `?since` replays and resends) and the open SSE streams. */
+  const history: MockEvent[] = [];
+  const streams = new Set<(ev: MockEvent) => void>();
 
   const state = (o: MockOrder): OrderState => {
     if (now() - o.submittedAt < fillAfterMs) return "pending";
@@ -217,8 +223,17 @@ export async function startMockServer(opts: MockServerOptions = {}): Promise<Moc
   };
 
   const sendEvent = (type: string, data: Record<string, unknown>, sample = false) => {
-    const payload = { id: `evt_mock_${++eventSeq}`, type, livemode: false, ...(sample ? { sample: true } : {}), createdAt: new Date(now()).toISOString(), data };
-    if (!opts.webhookUrl) return { payload, deliveries: 0 };
+    const payload: MockEvent = { id: `evt_mock_${++eventSeq}`, type, livemode: false, ...(sample ? { sample: true as const } : {}), createdAt: new Date(now()).toISOString(), data };
+    history.push(payload);
+    if (history.length > 200) history.shift();
+    return { payload, deliveries: deliver(payload) };
+  };
+
+  /** Push to open streams and POST to `webhookUrl` (when set). Returns the number of webhook deliveries. */
+  const deliver = (payload: MockEvent): number => {
+    for (const push of streams) push(payload);
+    if (!opts.webhookUrl) return 0;
+    const { type } = payload;
     const url = opts.webhookUrl;
     const secret = opts.webhookSecret ?? "";
     const p = (async () => {
@@ -239,7 +254,7 @@ export async function startMockServer(opts: MockServerOptions = {}): Promise<Moc
     })();
     deliveries.add(p);
     void p.finally(() => deliveries.delete(p));
-    return { payload, deliveries: 1 };
+    return 1;
   };
 
   const quoteView = (q: MockQuote) => ({
@@ -418,14 +433,22 @@ export async function startMockServer(opts: MockServerOptions = {}): Promise<Moc
       const r = sendEvent(type, type.startsWith("order.") ? { order: sample } : {}, true);
       return [200, { eventId: r.payload.id, deliveries: r.deliveries, payload: r.payload }];
     }
+    mm = /^\/v1\/webhooks\/events\/([^/]+)\/resend$/.exec(path);
+    if (m === "POST" && mm) {
+      const ev = history.find((e) => e.id === decodeURIComponent(mm![1]!));
+      if (!ev) throw new HttpError("NOT_FOUND", "Event not found (the mock keeps the last 200)");
+      const n = deliver(ev);
+      return [202, { eventId: ev.id, type: ev.type, livemode: false, deliveries: n ? [{ id: `dlv_mock_resend_${++seq}`, endpointId: "whe_mock" }] : [] }];
+    }
     if (m === "POST" && path === "/_mock/reset") {
       quotes.clear();
       orders.clear();
       seq = 0;
       eventSeq = 0;
+      history.length = 0;
       return [200, { ok: true }];
     }
-    throw new HttpError("NOT_FOUND", `The local mock API has no route for ${m} ${path}. It covers chains, tokens, prices, quote, orders, simulate, status and webhooks/trigger; use an lh_test_ key against https://api.layerhop.com for everything else.`);
+    throw new HttpError("NOT_FOUND", `The local mock API has no route for ${m} ${path}. It covers chains, tokens, prices, quote, orders, simulate, status and webhooks (stream, trigger, resend); use an lh_test_ key against https://api.layerhop.com for everything else.`);
   }
 
   const handler = async (req: IncomingMessage, res: ServerResponse) => {
@@ -440,6 +463,10 @@ export async function startMockServer(opts: MockServerOptions = {}): Promise<Moc
       return;
     }
     const url = new URL(req.url ?? "/", "http://localhost");
+    if (req.method === "GET" && url.pathname === "/v1/webhooks/stream") {
+      openStream(req, res, url);
+      return;
+    }
     let status: number;
     let body: unknown;
     try {
@@ -451,6 +478,23 @@ export async function startMockServer(opts: MockServerOptions = {}): Promise<Moc
     }
     res.writeHead(status, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify(body));
     log(`${req.method} ${url.pathname}${url.search} ${status}`);
+  };
+
+  /** `GET /v1/webhooks/stream`: SSE of every mock event (`?since=` replays the history first). */
+  const openStream = (req: IncomingMessage, res: ServerResponse, url: URL) => {
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+    const write = (ev: MockEvent) => res.write(`event: event\ndata: ${JSON.stringify(ev)}\n\n`);
+    res.write(`event: ready\ndata: ${JSON.stringify({ retryMs: 3000 })}\n\n`);
+    const since = url.searchParams.get("since");
+    if (since) for (const ev of history) if (ev.createdAt > since) write(ev);
+    streams.add(write);
+    const beat = setInterval(() => res.write(": ping\n\n"), 15_000);
+    beat.unref?.();
+    req.on("close", () => {
+      clearInterval(beat);
+      streams.delete(write);
+    });
+    log(`GET ${url.pathname}${url.search} 200 (stream)`);
   };
 
   const server: Server = createServer((req, res) => void handler(req, res));

@@ -15,7 +15,7 @@ import {
 } from "@layerhop/ai";
 import { z } from "zod/v3";
 
-export const VERSION = "0.8.0";
+export const VERSION = "0.9.0";
 
 export interface LayerHopActionProviderOptions extends Omit<LayerHopToolsOptions, "toolName" | "client"> {
   /**

@@ -29,6 +29,13 @@ export interface PlanDefinition {
   whiteLabel: boolean;
   /** Priority support (shown in the dashboard; support is handled by people, not code). */
   prioritySupport: boolean;
+  /**
+   * Market data API (`/v1/market/*`, MARKET_API_LIVE=1): requests per minute per API key. 0 = the plan
+   * has no market data access. Agent-suggested placeholder until the owner sets it.
+   */
+  marketRpm: number;
+  /** Market data calls per account per calendar month (UTC), live and test keys together. null = no monthly cap. */
+  marketMonthlyCalls: number | null;
 }
 
 export const FREE_PLAN_ID = "free";
@@ -38,22 +45,24 @@ const PLAN_ID_RE = /^[a-z0-9-]{1,32}$/;
  * Placeholder plans (owner decision pending). Free = today's limits exactly: 120 requests/minute per
  * key (the `api_keys.rate_limit_rpm` default), no monthly quota, 10 webhook endpoints
  * (`MAX_WEBHOOKS`), a 50 bps partner fee cap (`PARTNER_STARTER_MAX_FEE_BPS`), LayerHop branding.
+ * Market data limits (`marketRpm`, `marketMonthlyCalls`) are an agent suggestion (open decision
+ * "Market data API"); Free gets a small taste.
  */
 export const DEFAULT_PLANS: readonly PlanDefinition[] = [
   {
     id: "free", name: "Free", tagline: "Everything you need to ship a swap or checkout integration.",
     priceUsdc: "0", rateLimitRpm: 120, monthlyRequests: null, webhookEndpoints: 10, maxPartnerFeeBps: 50,
-    whiteLabel: false, prioritySupport: false,
+    whiteLabel: false, prioritySupport: false, marketRpm: 10, marketMonthlyCalls: 5_000,
   },
   {
     id: "pro", name: "Pro", tagline: "Higher limits and your own brand on the widget and checkout.",
     priceUsdc: "49", rateLimitRpm: 600, monthlyRequests: 2_000_000, webhookEndpoints: 25, maxPartnerFeeBps: 100,
-    whiteLabel: true, prioritySupport: false,
+    whiteLabel: true, prioritySupport: false, marketRpm: 120, marketMonthlyCalls: 1_000_000,
   },
   {
     id: "scale", name: "Scale", tagline: "For wallets and apps with real volume.",
     priceUsdc: "299", rateLimitRpm: 3_000, monthlyRequests: 20_000_000, webhookEndpoints: 100, maxPartnerFeeBps: 150,
-    whiteLabel: true, prioritySupport: true,
+    whiteLabel: true, prioritySupport: true, marketRpm: 600, marketMonthlyCalls: 10_000_000,
   },
 ];
 
@@ -99,6 +108,9 @@ export function parsePlans(json: string | undefined): PlanDefinition[] {
       name: pick("name"), tagline: pick("tagline") ?? "", priceUsdc: pick("priceUsdc"), rateLimitRpm: pick("rateLimitRpm"),
       monthlyRequests: pick("monthlyRequests") ?? null, webhookEndpoints: pick("webhookEndpoints"), maxPartnerFeeBps: pick("maxPartnerFeeBps"),
       whiteLabel: pick("whiteLabel") ?? false, prioritySupport: pick("prioritySupport") ?? false,
+      // optional for a new plan id: the Free plan's market limits
+      marketRpm: pick("marketRpm") ?? DEFAULT_PLANS[0]!.marketRpm,
+      marketMonthlyCalls: e.marketMonthlyCalls !== undefined ? e.marketMonthlyCalls : base ? base.marketMonthlyCalls : DEFAULT_PLANS[0]!.marketMonthlyCalls,
     };
     if (typeof p.name !== "string" || !p.name.trim() || p.name.length > 32) fail("name is required (max 32 chars)");
     if (typeof p.tagline !== "string" || p.tagline.length > 200) fail("tagline must be a string (max 200 chars)");
@@ -109,6 +121,8 @@ export function parsePlans(json: string | undefined): PlanDefinition[] {
     if (!isInt(p.maxPartnerFeeBps, 0, 10_000)) fail("maxPartnerFeeBps must be an integer 0..10000");
     if (typeof p.whiteLabel !== "boolean") fail("whiteLabel must be a boolean");
     if (typeof p.prioritySupport !== "boolean") fail("prioritySupport must be a boolean");
+    if (!isInt(p.marketRpm, 0, 100_000)) fail("marketRpm must be an integer 0..100000");
+    if (p.marketMonthlyCalls !== null && !isInt(p.marketMonthlyCalls, 1, 1e12)) fail("marketMonthlyCalls must be a positive integer or null");
     return p as PlanDefinition;
   });
   const free = out.find((p) => p.id === FREE_PLAN_ID);

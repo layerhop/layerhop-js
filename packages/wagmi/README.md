@@ -62,7 +62,16 @@ await sent.wait(); // true once confirmed
 ```
 
 Options: `batch` (`"auto"` default, `"never"`, `"require"`), `tx` (an already built tx), `report` (default true),
-`onStep`, `onApproval({ batched })`, `onBatchFallback`, `onExtraTxError`.
+`onStep`, `onApproval({ batched })`, `onBatchFallback`, `onExtraTxError`, `speed` (`"normal"` default, `"fast"`, `"instant"`).
+
+## Transaction speed
+
+`speed: "fast" | "instant"` suggests a higher priority fee to the wallet with each transaction: the median 75th / 95th
+percentile tip of the last 10 blocks (`eth_feeHistory`), at least `eth_maxPriorityFeePerGas`, capped at
+max(5 × that, 2 × base fee) / max(10 × that, 4 × base fee); `maxFeePerGas` = 2× / 3× the next base fee + tip. Legacy chains
+get `gasPrice` × 1.2 / × 1.5. No effect on chains that ignore the priority fee (Arbitrum, ZKsync, Abstract:
+`speedSupported(chainId)`) or when fees can't be read. Batches carry no fee fields, so a send with a speed goes
+sequentially unless you set `batch`. Helpers: `speedFees`, `readFeeSnapshot`, `NO_PRIORITY_FEE_CHAINS`.
 
 ## How batching works
 

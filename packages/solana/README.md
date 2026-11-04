@@ -57,6 +57,13 @@ lands or its blockhash expires; `sendSvmTx` resolves after the first broadcast, 
 `wait()` resolves `true` (confirmed) or `false` (failed) and rejects with `LayerHopSolanaError` `BLOCKHASH_EXPIRED` when it
 can no longer land. A wallet answer without a signature is `WALLET_NO_SIGNATURE`.
 
+`speed: "fast" | "instant"` (default `"normal"`) raises the compute-unit price of a `wallet`-mode transaction before the
+wallet signs: the 75th / 95th percentile of `getRecentPrioritizationFees` for the accounts it writes, with a floor
+(20,000 / 200,000 micro-lamports) and a cap on the whole priority fee (0.0002 / 0.001 SOL), never lower than the route's
+own price. Only the ComputeBudget price changes (in place, or one `SetComputeUnitPrice` appended last); `api` and
+`cosigned` transactions are never changed. `sent.priority` reports it. Helpers: `applySolanaSpeed`,
+`withComputeUnitPrice`, `readComputeBudget`, `speedCuPrice`.
+
 Test-mode (`sandbox`) transactions never reach the wallet. `executeSolanaQuote` reports a placeholder signature instead.
 
 Other exports: `decodeSvmTx`, `solanaSendMode`, `confirmSignature`, `landSignedTx`, `walletSignature`, `isSignUnsupported`, `base64ToBytes`, `bytesToBase64`, `bytesToBase58`.

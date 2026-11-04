@@ -33,6 +33,11 @@ layerhop devnet                                   # real API with the mock provi
 layerhop deposit-address create USDC base USDC arbitrum --recipient 0x… --refund-to 0x…
 layerhop deposit-address list --status active     # also: get / refresh / disable <da_…>
 layerhop deposit-address simulate da_… 25         # test key only: record a fake deposit
+layerhop login                                    # save an API key (~/.config/layerhop, mode 600); logout forgets it
+layerhop listen --forward-to http://localhost:3000/webhooks   # your webhook events, signed, on localhost
+layerhop trigger order.filled                     # test key: a sample event to test endpoints and listen
+layerhop events resend evt_…                      # send an event again (endpoints + listen)
+layerhop usage --bucket hour                      # requests, errors, p50/p95 latency, error codes
 ```
 
 - `quote` takes the amount in **human units** (`100` = 100 USDC) and converts it to base units from
@@ -60,8 +65,13 @@ layerhop deposit-address simulate da_… 25         # test key only: record a fa
   `LAYERHOP_ENABLE_MOCK=1 PROVIDERS=mock`. Point clients at it with
   `LAYERHOP_API_URL=http://localhost:8787`. Mock transactions are dummies: never broadcast them.
 
+- `listen` streams your account's webhook events (the key's mode) and POSTs each to `--forward-to`,
+  signed like real deliveries with a per-session secret printed at start (or `--secret` /
+  `LAYERHOP_WEBHOOK_SECRET`), so your verify code runs unchanged. `--events a,b` filters types. It
+  reconnects on its own and replays events it missed. Works against `layerhop dev` too.
+
 Global options: `--api-url` (env `LAYERHOP_API_URL`, default `https://api.layerhop.com`), `--api-key`
-(env `LAYERHOP_API_KEY`), `--json`, `--help`, `--version`.
+(env `LAYERHOP_API_KEY`, else the key saved by `layerhop login`), `--json`, `--help`, `--version`.
 
 Exit codes: `0` ok, `1` API or order failure (`error: CODE: message`, plus a docs link), `2` usage error.
 

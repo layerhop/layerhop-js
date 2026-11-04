@@ -32,5 +32,20 @@ export {
   type ExecuteSolanaQuoteParameters,
   type ExecuteSolanaQuoteResult,
 } from "./send.js";
+export {
+  applySolanaSpeed,
+  readComputeBudget,
+  speedCuPrice,
+  withComputeUnitPrice,
+  recentPrioritizationFees,
+  priorityFeeLamports,
+  SPEED_MIN_CU_PRICE,
+  SPEED_PERCENTILE,
+  MAX_PRIORITY_FEE_LAMPORTS,
+  type SolanaSpeed,
+  type SpeedResult,
+  type SpeedSkipReason,
+  type ComputeBudgetInfo,
+} from "./priority.js";
 export { LayerHop, LayerHopApiError } from "@layerhop/sdk";
 export type { BuiltTx, SvmTx, Quote } from "@layerhop/sdk";

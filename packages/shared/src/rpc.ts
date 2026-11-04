@@ -29,12 +29,30 @@ export function rpcUrl(chainId: ChainId, env: Record<string, string | undefined>
 }
 
 /**
+ * Endpoints for eth_getLogs scans (checkout transfers and deposit addresses) where the default RPC
+ * can't serve them: bsc-dataseed answers "limit exceeded" to any log query and mainnet.base.org
+ * rate-limits them (429); PublicNode serves a 9,000-block range on both (checked 2026-11-04). Only for
+ * logs: PublicNode answers a receipt it hasn't seen with an error ("Archive requests require a personal
+ * token"), not null, so it can't be a default for tx tracking. Override with env LOGS_RPC_URL_<chainId>.
+ */
+export const LOGS_RPC_URLS: Readonly<Record<ChainId, string>> = {
+  56: "https://bsc-rpc.publicnode.com",
+  8453: "https://base-rpc.publicnode.com",
+};
+
+export function logsRpcUrl(chainId: ChainId, env: Record<string, string | undefined> = {}): string | undefined {
+  return env[`LOGS_RPC_URL_${chainId}`] ?? LOGS_RPC_URLS[chainId] ?? rpcUrl(chainId, env);
+}
+
+/**
  * Second public endpoints that served old receipts (eth_chainId and a ~20k-block-old
- * eth_getTransactionReceipt checked 2026-10-22). Tried after the primary fails.
+ * eth_getTransactionReceipt checked 2026-10-22). Tried after the primary fails. Base: Tenderly's public
+ * gateway (bursts, null for an unseen receipt, old receipts, CORS and 1,000-block log ranges, checked
+ * 2026-11-04; drpc and the others fail the log range, PublicNode errors on an unseen receipt).
  */
 export const FALLBACK_RPC_URLS: Readonly<Record<ChainId, string>> = {
   1: "https://eth.drpc.org", 10: "https://optimism.drpc.org", 56: "https://bsc-dataseed1.defibit.io",
-  137: "https://polygon-rpc.com", 8453: "https://base.drpc.org", 42161: "https://arbitrum.drpc.org",
+  137: "https://polygon-rpc.com", 8453: "https://base.gateway.tenderly.co", 42161: "https://arbitrum.drpc.org",
   43114: "https://avalanche.drpc.org", 80094: "https://berachain.drpc.org", 146: "https://sonic.drpc.org",
   999: "https://hyperliquid.drpc.org", 130: "https://unichain.drpc.org", 59144: "https://linea.drpc.org",
   100: "https://rpc.gnosischain.com", 534352: "https://scroll.drpc.org", 5000: "https://mantle.drpc.org",

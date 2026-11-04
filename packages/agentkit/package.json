@@ -1,6 +1,6 @@
 {
   "name": "@layerhop/agentkit",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "LayerHop action provider for Coinbase AgentKit: best-price cross-chain and same-chain swaps (EVM and Solana), deposit addresses and checkout for on-chain agents. The wallet provider signs; LayerHop never sees keys.",
   "license": "MIT",
   "author": "LayerHop (https://layerhop.com)",

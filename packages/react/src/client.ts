@@ -15,6 +15,8 @@ export type LayerHopClient = Pick<LayerHop, "quote" | "buildTx" | "submit" | "st
   reportSubmitted?: (quoteId: string, txHash: string) => Promise<unknown>;
   /** Live order status over SSE (`@layerhop/sdk` 0.3+); `useOrderStream` needs it. */
   streamOrder?: LayerHop["streamOrder"];
+  /** Live quotes over SSE (`GET /v1/quote/stream`); `useQuoteStream` needs it. */
+  quotes?: Pick<LayerHop["quotes"], "stream">;
   chains?: () => Promise<readonly Chain[]>;
   /** May return the list itself or a `GET /v1/tokens` page (`{ tokens }`, as `LayerHop.tokens` does). */
   tokens?: (chain: string | number) => Promise<readonly Token[] | { tokens: readonly Token[] }>;

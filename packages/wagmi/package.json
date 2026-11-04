@@ -1,6 +1,6 @@
 {
   "name": "@layerhop/wagmi",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Execute LayerHop quotes with wagmi or viem: ERC-20 approval, swap and extra calls in one EIP-5792 confirmation when the wallet supports it, sequential transactions otherwise",
   "license": "MIT",
   "author": "LayerHop (https://layerhop.com)",

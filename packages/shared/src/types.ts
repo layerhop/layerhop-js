@@ -1,3 +1,5 @@
+import type { QuoteAvoid } from "./avoid.js";
+
 export type ChainId = number;
 /** Virtual machine family: EVM chains, Solana (`svm`) and Tron (`tvm`, D-048; behind TRON_ENABLED). */
 export type Vm = "evm" | "svm" | "tvm";
@@ -27,7 +29,8 @@ export interface QuoteRequest {
   gasOnArrivalUsd?: number;
   /**
    * `EXACT_INPUT` (default): `amount` is what the sender pays. `EXACT_OUTPUT`: `amount` is the exact
-   * amount of `dstToken` delivered on the destination (used with destination calls, D-029).
+   * amount of `dstToken` delivered on the destination ("receive exact amount", and always with
+   * destination calls, D-029). Only providers with `exactOutput` (or `destinationCalls` for calls) quote it.
    */
   tradeType?: TradeType;
   /**
@@ -42,6 +45,12 @@ export interface QuoteRequest {
    * such requests (EVM same-chain, ERC-20 input).
    */
   gasless?: boolean;
+  /**
+   * Providers, bridges and exchanges the user never wants this route to use (`excludeProviders`,
+   * `excludeBridges`, `excludeExchanges`; see avoid.ts). The API skips avoided providers; providers
+   * that route through third-party venues (LI.FI) pass the rest on and never return a route through one.
+   */
+  avoid?: QuoteAvoid;
 }
 
 /** EIP-712 typed data exactly as a provider returned it (sign it unchanged with `eth_signTypedData_v4`). */
@@ -116,6 +125,11 @@ export interface FeeBreakdown {
   integratorFeeBps?: number;
   /** Partner id that earns integratorFeeBps. */
   integrator?: string;
+  /**
+   * Token class the LayerHop fee was priced on (D-058): `stable`, `major` or `longtail`. Present only
+   * when fee tiers are on (FEE_TIERS_JSON).
+   */
+  tier?: "stable" | "major" | "longtail";
   /**
    * Who receives positive slippage (output above `dstAmount`), when the provider documents it (D-030).
    * - `user`: the recipient keeps all of it.
@@ -249,6 +263,11 @@ export interface ProviderQuote {
    * `request.amount` is the destination amount; otherwise the input is `request.amount`.
    */
   srcAmount?: string;
+  /**
+   * `EXACT_OUTPUT` quotes: the most the transaction can take from the sender (base units of srcToken),
+   * slippage included; >= srcAmount. Balance and approval checks use it. Defaults to srcAmount.
+   */
+  srcAmountMax?: string;
   /** Set when the request had destination calls and this provider will run them. */
   calls?: DestinationCallsPlan;
   /** Some providers return the transaction together with the quote. */
@@ -331,6 +350,12 @@ export interface RouteProvider {
    * are skipped when a request has calls or `tradeType: "EXACT_OUTPUT"`.
    */
   readonly destinationCalls?: boolean;
+  /**
+   * Quotes `tradeType: "EXACT_OUTPUT"` without calls ("receive exact amount"): the quote carries
+   * `srcAmount` (+ `srcAmountMax`) and `dstAmountMin` >= the requested amount. Providers without it
+   * are skipped for such requests, never faked. Our fee bps must be the same as for exact input.
+   */
+  readonly exactOutput?: boolean;
   supports(req: QuoteRequest): boolean;
   quote(req: QuoteRequest, ctx: ProviderContext): Promise<ProviderQuote>;
   /** Build the tx for a quote. Must return quote.tx if the provider already supplied it. */

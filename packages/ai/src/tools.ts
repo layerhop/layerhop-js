@@ -12,7 +12,7 @@ import { API_KEY_MISSING, DEPOSIT_WARNING, NO_KEYS } from "./core/safety.js";
 import { SandboxTxError, toTransactionRequests } from "./core/txs.js";
 import { TOOL_NAMES, zodV4Schemas, type ToolName, type ToolSchemas } from "./schemas.js";
 
-export const VERSION = "0.8.0";
+export const VERSION = "0.9.0";
 const DEFAULT_API_URL = "https://api.layerhop.com";
 const INTEGRATOR_RE = /^[a-z0-9-]{1,32}$/;
 

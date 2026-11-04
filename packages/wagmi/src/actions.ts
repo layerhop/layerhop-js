@@ -26,6 +26,16 @@ export {
   type SentEvmTx,
 } from "./core.js";
 export {
+  speedFees,
+  speedSupported,
+  readFeeSnapshot,
+  NO_PRIORITY_FEE_CHAINS,
+  type GasSpeed,
+  type FeeSnapshot,
+  type TxFees,
+} from "./speed.js";
+export { speedActive } from "./core.js";
+export {
   wagmiDriver,
   walletClientDriver,
   CALLS_TIMEOUT_MS,

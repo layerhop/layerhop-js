@@ -1,6 +1,7 @@
 import { LayerHop, type BuiltTx, type SvmTx } from "@layerhop/sdk";
 import { VersionedTransaction, type Connection, type SendOptions } from "@solana/web3.js";
 import { base64ToBytes, bytesToBase58, bytesToBase64 } from "./bytes.js";
+import { applySolanaSpeed, type SolanaSpeed, type SpeedResult } from "./priority.js";
 import type { SolanaSigner } from "./signers.js";
 
 /**
@@ -78,6 +79,12 @@ export interface SendSvmTxOptions {
    */
   sendOptions?: SendOptions;
   onStep?: (step: SolanaSendStep) => void;
+  /**
+   * Transaction speed (`priority.ts`). Default `normal`: sent exactly as built. `fast` / `instant`
+   * raise the compute-unit price of a plain user transaction (`wallet` mode) from recent fees on
+   * `connection`, capped; `api` and `cosigned` transactions are never changed.
+   */
+  speed?: SolanaSpeed;
   /** How often the signed transaction is sent again while it hasn't landed. Default 2000 ms. */
   resendIntervalMs?: number;
   /** Gives up re-sending after this long even when the block height can't be read. Default 120 s. */
@@ -90,6 +97,8 @@ export interface SentSvmTx {
   /** Transaction signature (base58): report this to LayerHop right away (re-sends continue in the background). */
   signature: string;
   mode: SolanaSendMode;
+  /** The raised priority fee, when `speed` changed the transaction. */
+  priority?: NonNullable<SpeedResult["applied"]>;
   /**
    * Resolves true once confirmed, false when the transaction failed (or `isCancelled`). Rejects with
    * `BLOCKHASH_EXPIRED` when the transaction can no longer land, `CONFIRMATION_TIMEOUT` after `timeoutMs`.
@@ -264,7 +273,7 @@ export async function sendSvmTx(signer: SolanaSigner, tx: SvmTx, opts: SendSvmTx
   if (tx.sandbox) throw new LayerHopSolanaError("SANDBOX_TX", "This is a test-mode placeholder transaction; it must never be signed or broadcast.");
   const { connection } = opts;
   const pause = opts.sleep ?? sleep;
-  const vtx = decodeSvmTx(tx);
+  let vtx = decodeSvmTx(tx);
   const mode = solanaSendMode(tx.submitViaApi, vtx.signatures);
   if (mode === "api" && (!opts.client || !opts.quoteId)) {
     throw new Error("This transaction must be submitted through the LayerHop API: pass `client` and `quoteId`.");
@@ -275,6 +284,13 @@ export async function sendSvmTx(signer: SolanaSigner, tx: SvmTx, opts: SendSvmTx
     opts.onStep?.("submitting");
     const signature = walletSignature(await opts.client!.submit(opts.quoteId!, bytesToBase64(signed.serialize())));
     return { signature, mode, wait: (o) => confirmSignature(connection, signature, o) };
+  }
+
+  let priority: SpeedResult["applied"];
+  if (mode === "wallet" && opts.speed && opts.speed !== "normal") {
+    const sped = await applySolanaSpeed(connection, vtx, opts.speed);
+    vtx = sped.tx;
+    priority = sped.applied;
   }
 
   let signed: VersionedTransaction | undefined;
@@ -294,7 +310,7 @@ export async function sendSvmTx(signer: SolanaSigner, tx: SvmTx, opts: SendSvmTx
   const land = (signature: string, bytes?: Uint8Array) => {
     const landing = landSignedTx({ connection, signature, bytes, lastValidBlockHeight, intervalMs: opts.resendIntervalMs, timeoutMs: opts.landTimeoutMs, sleep: pause });
     landing.catch(() => undefined); // surfaced through wait(); never an unhandled rejection
-    return { signature, mode, wait: (o?: ConfirmOptions) => waitOn(landing, o, pause) };
+    return { signature, mode, ...(priority ? { priority } : {}), wait: (o?: ConfirmOptions) => waitOn(landing, o, pause) };
   };
 
   if (!signed) {

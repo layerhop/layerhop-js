@@ -25,6 +25,28 @@ describe("sdk", () => {
     expect(seen.key).toBe("k1");
   });
 
+  it("sends avoid-lists: comma-separated in GET, arrays in POST, nothing when empty", async () => {
+    const seen: { url: string; body?: string }[] = [];
+    const lh = new LayerHop({
+      baseUrl: "http://x",
+      fetch: fakeFetch((url, init) => {
+        seen.push({ url, body: init?.body as string | undefined });
+        return [200, { best: { quoteId: "q1" }, quotes: [], errors: [] }];
+      }),
+    });
+    const params = { srcChain: "base", srcToken: "USDC", amount: "1", dstChain: "arbitrum", dstToken: "USDC", sender: "a", recipient: "b" };
+    await lh.quote({ ...params, excludeProviders: ["relay"], excludeBridges: ["stargate", "allbridge"], excludeExchanges: [] });
+    const sp = new URL(seen[0]!.url).searchParams;
+    expect(sp.get("excludeProviders")).toBe("relay");
+    expect(sp.get("excludeBridges")).toBe("stargate,allbridge");
+    expect(sp.has("excludeExchanges")).toBe(false);
+    const { amount: _a, ...rest } = params;
+    await lh.quote({ ...rest, dstAmount: "5", calls: [{ to: "0x1", data: "0x", value: "0" }], excludeExchanges: ["1inch"] });
+    const body = JSON.parse(seen[1]!.body!);
+    expect(body.excludeExchanges).toEqual(["1inch"]);
+    expect(body).not.toHaveProperty("excludeBridges");
+  });
+
   it("sends integrator and integratorFeeBps only when set; exposes the fee split", async () => {
     const urls: string[] = [];
     const fees = { ourFeeBps: 20, integratorFeeBps: 50, integrator: "myapp" };
@@ -101,6 +123,24 @@ describe("sdk", () => {
     expect(seen[1]!.body!.calls).toEqual([{ to: "0xt", data: "0x01" }]);
   });
 
+  it("sends dstAmount alone as GET /quote (receive exact amount) and exposes srcAmount + srcAmountMax", async () => {
+    const urls: string[] = [];
+    const f = fakeFetch((url) => {
+      urls.push(url);
+      return [200, { best: { quoteId: "q1", dstAmount: "10000000", dstAmountMin: "10000000", srcAmount: "10048745", srcAmountMax: "10048745" }, quotes: [], errors: [] }];
+    });
+    const lh = new LayerHop({ baseUrl: "http://x", fetch: f });
+    const r = await lh.quote({ srcChain: "base", srcToken: "USDC", dstChain: "arbitrum", dstToken: "USDC", dstAmount: "10000000", sender: "0xs", recipient: "0xr", referrer: "0xref" });
+    const u = new URL(urls[0]!);
+    expect(u.pathname).toBe("/v1/quote");
+    expect(u.searchParams.get("dstAmount")).toBe("10000000");
+    expect(u.searchParams.has("amount")).toBe(false);
+    expect(u.searchParams.get("referrer")).toBe("0xref");
+    expect(u.searchParams.has("gasOnArrival")).toBe(false);
+    expect(r.best.srcAmount).toBe("10048745");
+    expect(r.best.srcAmountMax).toBe("10048745");
+  });
+
   it("throws typed errors", async () => {
     const lh = new LayerHop({ baseUrl: "http://x", fetch: fakeFetch(() => [410, { error: { code: "QUOTE_EXPIRED", message: "old", requestId: "r" } }]) });
     await expect(lh.buildTx("q")).rejects.toMatchObject({ code: "QUOTE_EXPIRED", status: 410 });
@@ -167,6 +207,29 @@ describe("sdk", () => {
         : [404, { error: { code: "NOT_FOUND", message: "Checkout session not found" } }]) });
     await expect(lh.checkout.stream("cs_x").next()).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
     await expect(lh.webhooks.trigger("order.filled")).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+  });
+
+  it("webhooks.resend and stream({ since }); usage.get and usage.errors", async () => {
+    const seen: string[] = [];
+    const lh = new LayerHop({ baseUrl: "http://x", apiKey: "lh_test_k", fetch: fakeFetch((url, init) => {
+      seen.push(`${init?.method ?? "GET"} ${url} ${init?.body ?? ""}`.trim());
+      if (url.includes("/resend")) return [202, { eventId: "evt_1", type: "order.filled", livemode: false, deliveries: [] }];
+      if (url.includes("/usage/errors")) return [200, { livemode: false, errors: [{ code: "NO_ROUTE", requestId: "r1" }] }];
+      if (url.includes("/usage")) return [200, { bucket: "hour", totals: { requests: 3 } }];
+      return [200, {}];
+    }) });
+    expect((await lh.webhooks.resend("evt_1")).deliveries).toEqual([]);
+    await lh.webhooks.resend("evt 2", { endpointId: "whe_1" });
+    expect((await lh.usage.get({ bucket: "hour", keyId: "key_1" })).totals.requests).toBe(3);
+    await lh.usage.get();
+    expect((await lh.usage.errors({ code: "NO_ROUTE", limit: 5 }))[0]!.code).toBe("NO_ROUTE");
+    expect(seen).toEqual([
+      "POST http://x/v1/webhooks/events/evt_1/resend {}",
+      'POST http://x/v1/webhooks/events/evt%202/resend {"endpointId":"whe_1"}',
+      "GET http://x/v1/usage?bucket=hour&keyId=key_1",
+      "GET http://x/v1/usage",
+      "GET http://x/v1/usage/errors?code=NO_ROUTE&limit=5",
+    ]);
   });
 
   it("checkout.products: create, get, list, update and the public startSession", async () => {
@@ -317,6 +380,9 @@ describe("sdk", () => {
       return [201, { id: "lo_2" }];
     }) });
     await partner.limitOrders.create({ wallet: "W", srcToken: "USDC", dstToken: "SOL", amount: "10", dstAmount: "1", chain: 7565164 });
+    // EVM (CoW): the typed-data signature goes as { signature }
+    await partner.limitOrders.submit("lo_2", { signature: "0xabc" });
+    expect(JSON.parse(bodies[1]!)).toEqual({ signature: "0xabc" });
     expect(JSON.parse(bodies[0]!)).toEqual({ channel: "api", integrator: "myapp", integratorFeeBps: 15, wallet: "W", srcToken: "USDC", dstToken: "SOL", amount: "10", dstAmount: "1", chain: "7565164" });
   });
 
@@ -602,5 +668,44 @@ describe("webhooks", () => {
     await expect(constructWebhookEvent(secret, undefined, body)).rejects.toBeInstanceOf(WebhookSignatureError);
     const old = await signWebhookPayload(secret, body, Math.floor(Date.now() / 1000) - 3600);
     await expect(constructWebhookEvent(secret, old, body)).rejects.toThrow("Invalid LayerHop webhook signature");
+  });
+});
+
+describe("market data", () => {
+  it("builds /v1/market paths with the key and only the params given", async () => {
+    const seen: string[] = [];
+    const lh = new LayerHop({
+      baseUrl: "http://x", apiKey: "k1",
+      fetch: fakeFetch((url) => {
+        seen.push(url);
+        if (url.includes("/market/chains")) return [200, { chains: [{ chainId: 80094, slug: "berachain" }] }];
+        if (url.includes("/pools?")) return [200, { pools: [{ pool: "0xp" }] }];
+        if (/tokens\/0xt$/.test(url)) return [200, { token: { address: "0xt" } }];
+        return [200, { ok: true }];
+      }),
+    });
+    expect((await lh.marketChains())[0]!.slug).toBe("berachain");
+    await lh.marketTokens("berachain", { sort: "top", q: "kdk", limit: 5 });
+    expect((await lh.marketToken(80094, "0xt")).address).toBe("0xt");
+    await lh.marketHolders("robinhood", "0xt");
+    expect(await lh.marketPools("berachain", { window: "7d" })).toEqual([{ pool: "0xp" }]);
+    await lh.marketCandles("berachain", "0xp", { interval: "15m" });
+    await lh.marketTrades("berachain", "0xp", { before: "1:2:3" });
+    await lh.marketTraders("berachain", "0xp", { days: 30, sort: "volume" });
+    expect(seen).toEqual([
+      "http://x/v1/market/chains",
+      "http://x/v1/market/berachain/tokens?sort=top&q=kdk&limit=5",
+      "http://x/v1/market/80094/tokens/0xt",
+      "http://x/v1/market/robinhood/tokens/0xt/holders",
+      "http://x/v1/market/berachain/pools?window=7d",
+      "http://x/v1/market/berachain/pools/0xp/candles?interval=15m",
+      "http://x/v1/market/berachain/pools/0xp/trades?before=1%3A2%3A3",
+      "http://x/v1/market/berachain/pools/0xp/traders?days=30&sort=volume",
+    ]);
+  });
+
+  it("surfaces MARKET_UNAVAILABLE as a LayerHopApiError", async () => {
+    const lh = new LayerHop({ baseUrl: "http://x", fetch: fakeFetch(() => [503, { error: { code: "MARKET_UNAVAILABLE", message: "down", requestId: "r" } }]) });
+    await expect(lh.marketTokens("berachain")).rejects.toMatchObject({ code: "MARKET_UNAVAILABLE", status: 503 });
   });
 });

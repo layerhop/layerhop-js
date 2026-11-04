@@ -1,6 +1,6 @@
 {
   "name": "@layerhop/solana",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Execute LayerHop quotes with a Solana wallet: decode the transaction, sign and send it through @solana/wallet-adapter, Wallet Standard or an injected provider, submit-via-API and co-signed modes, then report it",
   "license": "MIT",
   "author": "LayerHop (https://layerhop.com)",

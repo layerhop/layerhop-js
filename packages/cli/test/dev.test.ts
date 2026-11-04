@@ -36,7 +36,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 describe("mock API (layerhop dev)", () => {
   it("runs quote → build → report → status with the SDK, and signs webhooks", async () => {
     const h = hooks();
-    const { s, lh } = await boot({ webhookUrl: "http://localhost:3999/hooks", webhookSecret: SECRET, fetch: h.fetch });
+    const { s, lh } = await boot({ webhookUrl: "http://localhost:3999/hooks", webhookSecret: SECRET, fetch: h.fetch, fillAfterMs: 400 }); // room for a slow CI runner between report and the pending check
     expect((await lh.chains()).some((c) => c.slug === "solana")).toBe(true);
     expect((await lh.tokens("base")).tokens.map((t) => t.symbol)).toContain("USDC");
 
@@ -55,7 +55,7 @@ describe("mock API (layerhop dev)", () => {
     const hash = `0x${"ab".repeat(32)}`;
     expect(await lh.reportSubmitted(q.best.quoteId, hash)).toEqual({ quoteId: q.best.quoteId, status: "submitted" });
     expect((await lh.status("mock", hash)).state).toBe("pending");
-    await wait(80);
+    await wait(500);
     const done = await lh.status("mock", hash);
     expect(done.state).toBe("filled");
     expect(done.dstTxHash).toMatch(/^[1-9A-HJ-NP-Za-km-z]{64,90}$/);
@@ -113,6 +113,27 @@ describe("mock API (layerhop dev)", () => {
     expect(r.deliveries).toBe(1);
     await s.idle();
     expect(JSON.parse(h.posts[0]!.body)).toMatchObject({ type: "order.refunded", sample: true, data: { order: { status: "refunded" } } });
+  });
+
+  it("streams events to `layerhop listen` (with ?since replay) and resends them", async () => {
+    const { lh } = await boot();
+    const first = await lh.webhooks.trigger("order.filled");
+    const ctrl = new AbortController();
+    const seen: string[] = [];
+    const reading = (async () => {
+      for await (const ev of lh.webhooks.stream({ since: "2000-01-01T00:00:00.000Z", signal: ctrl.signal })) {
+        seen.push(`${ev.type} ${ev.id}`);
+        if (seen.length === 3) ctrl.abort();
+      }
+    })().catch(() => undefined);
+    await wait(50);
+    const second = await lh.webhooks.trigger("checkout.session.completed");
+    await wait(30);
+    const resent = await lh.webhooks.resend(first.eventId);
+    expect(resent).toMatchObject({ eventId: first.eventId, type: "order.filled", deliveries: [] });
+    await reading;
+    expect(seen).toEqual([`order.filled ${first.eventId}`, `checkout.session.completed ${second.eventId}`, `order.filled ${first.eventId}`]);
+    await expect(lh.webhooks.resend("evt_nope")).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
 

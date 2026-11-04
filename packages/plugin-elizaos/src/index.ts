@@ -13,7 +13,7 @@ import {
   type ToolName,
 } from "@layerhop/ai";
 
-export const VERSION = "0.8.0";
+export const VERSION = "0.9.0";
 
 /**
  * A signing service the agent's owner registers with the runtime (e.g. their wallet plugin) and names

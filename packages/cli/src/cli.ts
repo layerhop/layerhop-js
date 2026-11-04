@@ -7,11 +7,12 @@ import { CHAINS, LayerHop, LayerHopApiError, TOKENS, findToken, getChain, type D
 import { signWebhookPayload } from "@layerhop/shared";
 import { formatSeconds, formatUnits, json, parseUnits, table } from "./format.js";
 import { DEFAULT_FORK_CHAINS, anvilArgs, hasCommand, planForks, startProcess, type RunningProcess } from "./forks.js";
+import { API_KEY_FORMAT, configPath, maskKey, readConfig, removeConfig, writeConfig } from "./config.js";
 import { buildSwapLink } from "./link.js";
 import { startMockServer, type MockServer } from "./mock-server.js";
 import { TEMPLATE_NAMES, packageNameFrom, renderTemplate, type TemplateName } from "./templates.js";
 
-export const VERSION = "0.8.0";
+export const VERSION = "0.9.0";
 export const DEFAULT_API_URL = "https://api.layerhop.com";
 
 export interface Io {
@@ -28,6 +29,8 @@ export interface Io {
   /** `layerhop dev --fork`: is a command on PATH, and start one in the background. */
   hasCommand?: (cmd: string) => boolean;
   startProcess?: (cmd: string, args: string[]) => RunningProcess;
+  /** `layerhop login` without --api-key: read one line from the terminal (undefined = not interactive). */
+  readLine?: (prompt: string) => Promise<string>;
 }
 
 export const HELP = `layerhop ${VERSION} — LayerHop from your terminal
@@ -43,9 +46,14 @@ Commands:
   status <provider> <txhash> [--watch]        Order status; --watch polls until filled/refunded/failed
   link <amount> <token> <chain> <toToken> <toChain>
                                               Print a layerhop.com/swap deep link (--embed for /embed)
+  login [--api-key <key>]                     Save an API key for this computer (~/.config/layerhop, mode 600)
+  logout                                      Forget the saved API key
   listen --forward-to <url>                   Forward your account's webhook events to a local URL, signed
                                               (uses the API key's mode: test or live)
   trigger <event-type>                        Send a sample test-mode event, e.g. order.filled (test key)
+  events resend <evt_id> [--endpoint <whe_id>]
+                                              Send an event again (endpoints + running listen sessions)
+  usage [--bucket hour|day] [--key-id <id>]   Requests, errors, latency and error codes of your account
   deposit-address <create|list|get|refresh|disable|simulate>
                                               Deposit addresses (API key): users swap by sending tokens
     create <token> <chain> <toToken> <toChain> --recipient <addr> --refund-to <addr>
@@ -58,7 +66,7 @@ Commands:
 
 Global options:
   --api-url <url>      API origin (env LAYERHOP_API_URL, default ${DEFAULT_API_URL})
-  --api-key <key>      API key (env LAYERHOP_API_KEY)
+  --api-key <key>      API key (env LAYERHOP_API_KEY, else the key saved by \`layerhop login\`)
   --json               Machine-readable output
   -h, --help           Show help
   -v, --version        Show version
@@ -75,6 +83,7 @@ Dev options:    --port <n> (default 8787) --host <addr> --webhook-url <url> --se
                 --fill-after <seconds> (default 5) --fork [--fork-chains base,arbitrum] (needs anvil)
 Listen options: --forward-to <url> --events <type,type> --secret <whsec_…> (env LAYERHOP_WEBHOOK_SECRET;
                 default: a new secret per session, printed at start)
+Usage options:  --bucket hour|day (default day: last 30 days; hour: last 48 hours) --key-id <key_…> --limit <n>
 
 LayerHop never holds keys: the CLI quotes and tracks; your wallet signs.`;
 
@@ -118,6 +127,9 @@ const OPTIONS = {
   "fill-after": { type: "string" },
   fork: { type: "boolean" },
   "fork-chains": { type: "string" },
+  endpoint: { type: "string" },
+  bucket: { type: "string" },
+  "key-id": { type: "string" },
 } as const;
 
 export type ParsedArgs = ReturnType<typeof parse>;
@@ -145,23 +157,30 @@ function need(args: string[], n: number, usage: string): string[] {
   return args;
 }
 
+/** --api-key, then LAYERHOP_API_KEY, then the key saved by `layerhop login`. */
+function apiKeyOf(opts: ParsedArgs["opts"], io: Io): string | undefined {
+  return opts["api-key"] ?? io.env.LAYERHOP_API_KEY ?? readConfig(io.env).apiKey;
+}
+
 function client(opts: ParsedArgs["opts"], io: Io): LayerHop {
   return new LayerHop({
-    baseUrl: opts["api-url"] ?? io.env.LAYERHOP_API_URL ?? DEFAULT_API_URL,
-    apiKey: opts["api-key"] ?? io.env.LAYERHOP_API_KEY,
+    baseUrl: apiUrl(opts, io),
+    apiKey: apiKeyOf(opts, io),
     integrator: opts.integrator,
     fetch: io.fetch,
   });
 }
 
 function apiUrl(opts: ParsedArgs["opts"], io: Io): string {
-  return (opts["api-url"] ?? io.env.LAYERHOP_API_URL ?? DEFAULT_API_URL).replace(/\/$/, "");
+  // A URL saved at login applies only to the saved key (e.g. the local mock), never to an explicit one.
+  const saved = opts["api-key"] || io.env.LAYERHOP_API_KEY ? undefined : readConfig(io.env).apiUrl;
+  return (opts["api-url"] ?? io.env.LAYERHOP_API_URL ?? saved ?? DEFAULT_API_URL).replace(/\/$/, "");
 }
 
 /** GET a /v1 route the SDK has no method for; same error shape as the SDK. */
 async function apiGet<T>(path: string, opts: ParsedArgs["opts"], io: Io): Promise<T> {
   const headers: Record<string, string> = {};
-  const key = opts["api-key"] ?? io.env.LAYERHOP_API_KEY;
+  const key = apiKeyOf(opts, io);
   if (key) headers["x-api-key"] = key;
   const res = await io.fetch(`${apiUrl(opts, io)}/v1${path}`, { headers });
   const body = (await res.json().catch(() => ({}))) as { error?: { code: string; message: string; requestId?: string } };
@@ -474,9 +493,98 @@ const EVENT_TYPES: readonly WebhookEventType[] = [
 ];
 
 function requireKey(opts: ParsedArgs["opts"], io: Io, what: string): string {
-  const key = opts["api-key"] ?? io.env.LAYERHOP_API_KEY;
-  if (!key) throw new UsageError(`${what} needs an API key: --api-key or LAYERHOP_API_KEY (create one at https://dashboard.layerhop.com/keys)`);
+  const key = apiKeyOf(opts, io);
+  if (!key) throw new UsageError(`${what} needs an API key: run \`layerhop login\`, or pass --api-key / LAYERHOP_API_KEY (create one at https://dashboard.layerhop.com/keys)`);
   return key;
+}
+
+/** Every event type a stream can carry (for `listen --events`). */
+const LISTEN_EVENT_TYPES: readonly string[] = [
+  ...EVENT_TYPES, "order.dropped", "checkout.session.refunded", "invoice.sent", "invoice.paid",
+  "limit_order.opened", "limit_order.filled", "limit_order.cancelled", "limit_order.expired", "limit_order.failed", "webhook.test",
+].filter((t, i, a) => a.indexOf(t) === i);
+
+/**
+ * `layerhop login`: check an API key against the API and save it (mode 600). Without --api-key it
+ * asks for one on the terminal; LAYERHOP_API_KEY is used when set.
+ */
+async function cmdLogin(p: ParsedArgs, io: Io): Promise<number> {
+  let key = p.opts["api-key"] ?? io.env.LAYERHOP_API_KEY;
+  if (!key) {
+    if (!io.readLine) throw new UsageError("Usage: layerhop login --api-key lh_test_… (create a key at https://dashboard.layerhop.com/keys)");
+    io.err("Create a key at https://dashboard.layerhop.com/keys (lh_test_… for test mode, lh_live_… for live).");
+    key = (await io.readLine("Paste your API key: ")).trim();
+  }
+  if (!API_KEY_FORMAT.test(key)) throw new UsageError("That doesn't look like a LayerHop API key (lh_live_… or lh_test_…)");
+  const url = p.opts["api-url"] ?? io.env.LAYERHOP_API_URL;
+  // Check the key with a cheap authenticated read. Only a definite 401 refuses; offline keeps it.
+  let warning: string | undefined;
+  try {
+    await apiGet("/usage?bucket=hour", { ...p.opts, "api-key": key }, io);
+  } catch (e) {
+    if (e instanceof LayerHopApiError && e.status === 401) throw e;
+    warning = `could not verify the key (${(e as Error).message}); saved it anyway`;
+  }
+  const file = writeConfig(io.env, { apiKey: key, ...(url ? { apiUrl: url.replace(/\/$/, "") } : {}) });
+  const mode = key.startsWith("lh_test_") ? "test" : "live";
+  if (p.opts.json) io.out(json({ ok: true, key: maskKey(key), mode, path: file, ...(url ? { apiUrl: url } : {}), ...(warning ? { warning } : {}) }));
+  else {
+    if (warning) io.err(`warning: ${warning}`);
+    io.out(`Logged in with ${maskKey(key)} (${mode} mode). Saved to ${file} (readable only by you).`);
+  }
+  return 0;
+}
+
+function cmdLogout(p: ParsedArgs, io: Io): number {
+  const file = configPath(io.env);
+  const removed = removeConfig(io.env);
+  if (p.opts.json) io.out(json({ ok: true, removed, path: file ?? null }));
+  else io.out(removed ? `Removed the saved API key (${file}).` : "No saved API key.");
+  return 0;
+}
+
+/** `layerhop events resend <evt_…>`: queue an event again for its endpoints and running listen sessions. */
+async function cmdEvents(p: ParsedArgs, io: Io): Promise<number> {
+  const [sub, id] = p.args;
+  if (sub !== "resend" || !id) throw new UsageError("Usage: layerhop events resend <evt_id> [--endpoint <whe_id>]");
+  requireKey(p.opts, io, "events resend");
+  const r = await client(p.opts, io).webhooks.resend(id, { endpointId: p.opts.endpoint });
+  if (p.opts.json) io.out(json(r));
+  else io.out(`Resent ${r.type} [${r.eventId}]: queued for ${r.deliveries.length} endpoint${r.deliveries.length === 1 ? "" : "s"} and any running \`layerhop listen\`.`);
+  return 0;
+}
+
+const ms = (v: number | null) => (v === null ? "-" : v >= 1000 ? `${(v / 1000).toFixed(2)} s` : `${v} ms`);
+
+/** `layerhop usage`: the key's account usage, latency and errors (GET /v1/usage + /v1/usage/errors). */
+async function cmdUsage(p: ParsedArgs, io: Io): Promise<number> {
+  requireKey(p.opts, io, "usage");
+  const bucket = p.opts.bucket ?? "day";
+  if (bucket !== "hour" && bucket !== "day") throw new UsageError("--bucket must be hour or day");
+  const limit = int(p.opts.limit, "limit") ?? 10;
+  const lh = client(p.opts, io);
+  const [report, errors] = await Promise.all([lh.usage.get({ bucket, keyId: p.opts["key-id"] }), lh.usage.errors({ keyId: p.opts["key-id"], limit: Math.min(200, Math.max(1, limit)) })]);
+  if (p.opts.json) {
+    io.out(json({ ...report, recentErrors: errors }));
+    return 0;
+  }
+  const t = report.totals;
+  const rate = t.requests ? ((t.errors / t.requests) * 100).toFixed(2) : "0.00";
+  io.out(`${report.livemode ? "Live" : "Test"} mode, ${bucket === "day" ? "last 30 days" : "last 48 hours"}${report.keyId ? `, key ${report.keyId}` : ""}`);
+  io.out(`Requests ${t.requests}  errors ${t.errors} (${rate}%)  2xx ${t.byStatusClass["2xx"]}  4xx ${t.byStatusClass["4xx"]}  5xx ${t.byStatusClass["5xx"]}  p50 ${ms(t.p50Ms)}  p95 ${ms(t.p95Ms)}`);
+  if (report.byEndpoint.length) {
+    io.out("");
+    io.out(table(["ENDPOINT", "REQUESTS", "ERRORS", "P50", "P95"], report.byEndpoint.map((g) => [g.group, String(g.requests), String(g.errors), ms(g.p50Ms), ms(g.p95Ms)])));
+  }
+  if (report.errorCodes.length) {
+    io.out("");
+    io.out(table(["ERROR CODE", "COUNT", "ENDPOINTS"], report.errorCodes.map((e) => [e.code, String(e.count), Object.keys(e.byEndpoint).join(", ")])));
+  }
+  if (errors.length) {
+    io.out("");
+    io.out(table(["TIME", "CODE", "STATUS", "REQUEST", "REQUEST ID"], errors.map((e) => [e.ts.replace("T", " ").slice(0, 19), e.code, String(e.status), `${e.method} ${e.path}`, e.requestId])));
+  }
+  return 0;
 }
 
 function randomSecret(): string {
@@ -499,8 +607,8 @@ async function cmdListen(p: ParsedArgs, io: Io): Promise<number> {
     throw new UsageError("--forward-to must be a URL, e.g. http://localhost:3000/webhooks");
   }
   const only = p.opts.events?.split(",").map((s) => s.trim()).filter(Boolean);
-  const bad = only?.filter((t) => !(EVENT_TYPES as readonly string[]).includes(t));
-  if (bad?.length) throw new UsageError(`Unknown event type ${bad.join(", ")}. One of: ${EVENT_TYPES.join(", ")}`);
+  const bad = only?.filter((t) => !LISTEN_EVENT_TYPES.includes(t));
+  if (bad?.length) throw new UsageError(`Unknown event type ${bad.join(", ")}. One of: ${LISTEN_EVENT_TYPES.join(", ")}`);
   const max = int(p.opts["max-events"], "max-events");
   const secret = p.opts.secret ?? io.env.LAYERHOP_WEBHOOK_SECRET ?? randomSecret();
   const mode = key.startsWith("lh_test_") ? "test" : "live";
@@ -532,15 +640,22 @@ async function cmdListen(p: ParsedArgs, io: Io): Promise<number> {
     if (p.opts.json) io.out(json(line));
     else io.out(`${new Date().toISOString().slice(11, 19)}  --> ${ev.type} [${ev.id}]  <-- ${status} (${line.ms} ms)`);
   };
+  // After a disconnect, reconnect with ?since= so events created in the gap are replayed (the API
+  // keeps an hour). `since` only moves forward: a resent event carries its original createdAt.
+  let since: string | undefined;
   for (;;) {
+    const startedAt = new Date().toISOString();
     try {
-      for await (const ev of lh.webhooks.stream()) {
+      for await (const ev of lh.webhooks.stream({ since })) {
         attempt = 0;
+        if (!since || ev.createdAt > since) since = ev.createdAt;
         if (only && !only.includes(ev.type)) continue;
         await forward(ev);
         if (max !== undefined && ++forwarded >= max) return 0;
       }
+      since ??= startedAt;
     } catch (e) {
+      since ??= startedAt;
       if (e instanceof LayerHopApiError && e.status < 500 && e.status !== 429) throw e;
       io.err(`stream interrupted (${(e as Error).message}); reconnecting…`);
     }
@@ -782,6 +897,10 @@ export async function run(argv: string[], io: Io): Promise<number> {
       case "devnet": return await cmdDevnet(p, io);
       case "listen": return await cmdListen(p, io);
       case "trigger": return await cmdTrigger(p, io);
+      case "login": return await cmdLogin(p, io);
+      case "logout": return cmdLogout(p, io);
+      case "events": return await cmdEvents(p, io);
+      case "usage": return await cmdUsage(p, io);
       case "deposit-address": case "deposit-addresses": return await cmdDepositAddress(p, io);
       default: throw new UsageError(`Unknown command "${p.command}". Run layerhop --help.`);
     }

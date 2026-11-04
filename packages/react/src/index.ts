@@ -6,11 +6,14 @@ export {
   useBuildTx,
   useOrderStatus,
   useOrderStream,
+  useQuoteStream,
   autoRefetchMs,
   layerhopKeys,
   type UseQuoteOptions,
   type UseOrderStatusOptions,
   type OrderStreamState,
+  type UseQuoteStreamOptions,
+  type QuoteStreamState,
 } from "./hooks.js";
 export {
   useSwap,
@@ -26,4 +29,4 @@ export {
 } from "./swap.js";
 export { isFinalState, SAME_CHAIN_PROVIDERS, type LayerHopClient, type Chain, type Token } from "./client.js";
 export { LayerHop, LayerHopApiError } from "@layerhop/sdk";
-export type { BuiltTx, EvmTx, SvmTx, OrderStatus, ProviderId, Quote, QuoteParams, QuoteResponse, LayerHopOptions } from "@layerhop/sdk";
+export type { BuiltTx, EvmTx, SvmTx, OrderStatus, ProviderId, Quote, QuoteParams, QuoteResponse, QuoteStreamUpdate, LayerHopOptions } from "@layerhop/sdk";

@@ -1,6 +1,6 @@
 {
   "name": "@layerhop/react-native",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "LayerHop for React Native and Expo: the swap widget and checkout as native components (react-native-webview) with typed callbacks, plus wallet deep-link helpers",
   "license": "MIT",
   "author": "LayerHop (https://layerhop.com)",
